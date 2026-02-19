@@ -58,6 +58,17 @@ echo "{\"pending\":null}" > .register-request.json
 docker compose up -d
 ```
 
+## VPS deploy script (Docker)
+
+```bash
+./scripts/deploy_vps.sh
+```
+
+Deploy worker via Wrangler (optional):
+```bash
+./scripts/deploy_vps.sh --deploy-worker
+```
+
 ## Troubleshooting
 
 - Unauthorized: token expired, request register lagi dan login ulang.

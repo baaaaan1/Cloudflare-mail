@@ -41,11 +41,21 @@ async function main() {
     envContent = fs.readFileSync(envPath, 'utf8');
   } else {
     console.log('  Creating .env file...');
-    envContent = `CF_API_TOKEN=
+    envContent = `PORT=3000
+CF_API_TOKEN=
 CF_ACCOUNT_ID=
 CF_ZONE_ID=
 CF_D1_DATABASE_ID=
-PORT=3000
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_MASTER_ID=
+ACCESS_TOKEN=
+ACCESS_TOKEN_TIMESTAMP=
+ACCESS_TOKEN_EXPIRES_AT=
+TFA_SECRET=
+TFA_SECRET_EXPIRES_AT=
+PASSWORD_HASH=
+PASSWORD_SALT=
+ALLOW_UNAUTHENTICATED=false
 `;
     fs.writeFileSync(envPath, envContent);
     console.log('  .env created.');
@@ -169,6 +179,7 @@ PORT=3000
   console.log('\n\x1b[32m=== Setup Complete ===\x1b[0m');
   console.log('To start the panel, run:');
   console.log('  npm start');
+  console.log('Auth is required by default. Configure bot login (/register, /password) or set ALLOW_UNAUTHENTICATED=true for local dev.');
   
   console.log('\n\x1b[36m=== Final Cloudflare Configuration ===\x1b[0m');
   console.log('1. \x1b[1mEnable Email Routing\x1b[0m: Go to Cloudflare Dashboard > Email > Email Routing and click "Get Started" to add DNS records.');
