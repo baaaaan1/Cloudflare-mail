@@ -75,6 +75,11 @@ echo "{\"pending\":null}" > .register-request.json
 docker compose up -d
 ```
 
+Alternative (script):
+```bash
+./scripts/deploy_vps.sh
+```
+
 3) Open `http://your-vps-ip:3000`
 
 Notes:

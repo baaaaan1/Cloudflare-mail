@@ -10,7 +10,7 @@ Panduan setup Cloudflare dan konfigurasi dasar panel.
 - VPS: Docker + Docker Compose (untuk deploy via Docker)
 - Git (jika clone dari GitHub)
 
-### Install Docker (Ubuntu/Debian)
+### Install Docker (Ubuntu)
 
 ```bash
 sudo apt-get update
@@ -20,6 +20,29 @@ curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o 
 sudo chmod a+r /etc/apt/keyrings/docker.gpg
 echo \
   "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo $VERSION_CODENAME) stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker $USER
+```
+
+Log out dan login lagi agar grup docker aktif, lalu cek:
+```bash
+docker --version
+docker compose version
+```
+
+### Install Docker (Debian)
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg git
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
   $(. /etc/os-release && echo $VERSION_CODENAME) stable" | \
   sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 sudo apt-get update
@@ -116,6 +139,10 @@ Untuk VPS gunakan Docker:
 ```bash
 echo "{\"pending\":null}" > .register-request.json
 docker compose up -d
+```
+Atau pakai script:
+```bash
+./scripts/deploy_vps.sh
 ```
 
 Catatan:

@@ -58,6 +58,13 @@ echo "{\"pending\":null}" > .register-request.json
 docker compose up -d
 ```
 
+## Reload setelah edit .env
+
+```bash
+docker compose restart panel
+docker compose restart bot
+```
+
 ## VPS deploy script (Docker)
 
 ```bash
@@ -67,6 +74,23 @@ docker compose up -d
 Deploy worker via Wrangler (optional):
 ```bash
 ./scripts/deploy_vps.sh --deploy-worker
+```
+
+## Update dari GitHub
+
+```bash
+cd /path/to/Cloudflare-mail
+git status -sb
+git pull --rebase
+docker compose up -d --build
+```
+
+Jika ada perubahan lokal:
+```bash
+git stash -u
+git pull --rebase
+git stash pop
+docker compose up -d --build
 ```
 
 ## Troubleshooting
