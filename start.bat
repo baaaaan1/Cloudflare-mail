@@ -1,0 +1,3 @@
+@echo off
+echo Starting Cloudflare Email Panel (node server.js)...
+node server.js

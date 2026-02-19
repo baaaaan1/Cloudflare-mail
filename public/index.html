@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloudflare Email Panel</title>
+  <script src="/_sdk/element_sdk.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+  <link href="/styles.css" rel="stylesheet">
+  <script src="/_sdk/data_sdk.js" type="text/javascript"></script>
+ </head>
+ <body>
+  <canvas id="bgStars" aria-hidden="true"></canvas>
+  <script src="/theme-init.js"></script>
+  <button class="floating-app-icon" id="floatingAppIcon" type="button" aria-label="Cloudflare Email Panel">
+   <span class="material-icons">mail</span>
+  </button>
+  <button class="sidebar-handle" id="sidebarHandle" type="button" aria-label="Toggle sidebar">
+   <span class="material-icons" id="sidebarHandleIcon">chevron_left</span>
+  </button>
+  <div class="modal-overlay login-overlay" id="loginModal">
+   <div class="modal glass-card">
+    <div class="modal-header">
+     <h2 class="modal-title">Welcome Back</h2>
+    </div>
+    <div class="modal-body">
+    <div class="auth-toggle" id="authToggle">
+      <button type="button" class="auth-toggle-btn active" data-auth="token">Access Key</button>
+      <button type="button" class="auth-toggle-btn" data-auth="tfa">2FA Code</button>
+      <button type="button" class="auth-toggle-btn" data-auth="password">Password</button>
+    </div>
+     <div class="auth-notice is-hidden" id="authNotice"></div>
+     <form id="loginForm">
+      <div class="form-group" id="accessTokenGroup">
+       <label class="form-label" for="accessToken">Access Key</label>
+       <input type="password" id="accessToken" class="form-input" placeholder="Enter your access key" required>
+      </div>
+      <div class="form-group is-hidden" id="tfaTokenGroup">
+       <label class="form-label" for="tfaToken">2FA Code</label>
+       <input type="text" id="tfaToken" class="form-input" placeholder="Enter your 2FA code" inputmode="numeric" autocomplete="one-time-code">
+      </div>
+      <div class="form-group is-hidden" id="passwordGroup">
+       <label class="form-label" for="passwordInput">Password</label>
+       <input type="password" id="passwordInput" class="form-input" placeholder="Enter your password" autocomplete="current-password">
+      </div>
+     </form>
+    </div>
+    <div class="modal-actions">
+     <button type="button" class="btn btn-secondary" id="btn-register-request">Request Register (10m)</button>
+     <button type="submit" form="loginForm" class="btn" id="loginSubmitBtn">Login</button>
+    </div>
+   </div>
+  </div>
+
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+  <aside class="sidebar" id="sidebar">
+   <div class="sidebar-header">
+    <div class="brand">
+     <div class="brand-text">
+      <div class="brand-title">Cloudflare</div>
+      <div class="brand-subtitle">Email Panel</div>
+     </div>
+    </div>
+   </div>
+
+   <div class="sidebar-content">
+    <section class="sidebar-section">
+     <div class="section-title">Settings</div>
+     <form id="settingsForm" class="stack">
+      <label class="field">
+       <span class="field-label">Account ID</span>
+       <div class="input-group">
+        <input type="password" id="cfgAccountId" class="form-input" placeholder="Cloudflare Account ID">
+        <div class="input-actions">
+         <button type="button" class="icon-btn-sm" data-action="toggle-visibility" data-target="cfgAccountId" title="Show/Hide">
+          <span class="material-icons">visibility</span>
+         </button>
+         <button type="button" class="icon-btn-sm" data-action="copy" data-target="cfgAccountId" title="Copy">
+          <span class="material-icons">content_copy</span>
+         </button>
+        </div>
+       </div>
+      </label>
+      <label class="field">
+       <span class="field-label">Zone ID</span>
+       <div class="input-group">
+        <input type="password" id="cfgZoneId" class="form-input" placeholder="Cloudflare Zone ID">
+        <div class="input-actions">
+         <button type="button" class="icon-btn-sm" data-action="toggle-visibility" data-target="cfgZoneId" title="Show/Hide">
+          <span class="material-icons">visibility</span>
+         </button>
+         <button type="button" class="icon-btn-sm" data-action="copy" data-target="cfgZoneId" title="Copy">
+          <span class="material-icons">content_copy</span>
+         </button>
+        </div>
+       </div>
+      </label>
+      <label class="field">
+       <span class="field-label">D1 Database ID</span>
+       <div class="input-group">
+        <input type="password" id="cfgD1DatabaseId" class="form-input" placeholder="D1 Database ID">
+        <div class="input-actions">
+         <button type="button" class="icon-btn-sm" data-action="toggle-visibility" data-target="cfgD1DatabaseId" title="Show/Hide">
+          <span class="material-icons">visibility</span>
+         </button>
+         <button type="button" class="icon-btn-sm" data-action="copy" data-target="cfgD1DatabaseId" title="Copy">
+          <span class="material-icons">content_copy</span>
+         </button>
+        </div>
+       </div>
+      </label>
+      <label class="field">
+       <span class="field-label">API Token</span>
+       <div class="input-group">
+        <input type="password" id="cfgApiToken" class="form-input" placeholder="Update API Token">
+        <div class="input-actions">
+         <button type="button" class="icon-btn-sm is-hidden" id="cfgApiTokenToggle" data-action="toggle-visibility" data-target="cfgApiToken" title="Show/Hide">
+          <span class="material-icons">visibility</span>
+         </button>
+        </div>
+       </div>
+       <span class="field-help">Email Routing read/write required</span>
+      </label>
+      <button type="submit" class="btn">Save Settings</button>
+     </form>
+    </section>
+
+    <section class="sidebar-section">
+     <div class="section-title">Theme</div>
+     <div class="theme-presets" id="themePresets">
+      <button type="button" class="chip" data-preset="ocean">Ocean</button>
+      <button type="button" class="chip" data-preset="purple">Purple</button>
+      <button type="button" class="chip" data-preset="emerald">Emerald</button>
+      <button type="button" class="chip" data-preset="amber">Amber</button>
+     </div>
+     <div class="theme-custom">
+      <input type="color" id="accentPicker" value="#5aa9ff" aria-label="Pick accent color">
+      <input type="text" id="accentHexDisplay" class="form-input hex-display" readonly value="#5aa9ff">
+      <button type="button" class="btn btn-secondary" id="accentApply">Apply</button>
+     </div>
+     <div class="toggle-row">
+      <span>Dark Mode</span>
+      <button class="pill" id="btn-theme-toggle">
+       <span class="material-icons" id="theme-icon">dark_mode</span>
+       <span id="theme-text">Dark</span>
+      </button>
+     </div>
+    </section>
+
+    <section class="sidebar-section">
+     <div class="section-title">Status</div>
+     <div class="status-card" id="api-status">
+      <div class="status-row">
+       <span class="status-dot"></span>
+       <div>
+        <div class="status-title">Cloudflare API</div>
+        <div class="status-sub" id="api-status-desc">Checking...</div>
+       </div>
+      </div>
+      <button class="btn btn-secondary" id="btn-check-status">Check Status</button>
+     </div>
+    </section>
+
+    <section class="sidebar-section">
+     <div class="section-title">About</div>
+     <div class="about-card">
+      <div class="about-title">Mail Client UI</div>
+      <div class="about-sub">Glassmorphism layout with domain-aware routing.</div>
+      <a class="about-link" href="https://github.com/baaaaan1" target="_blank" rel="noopener noreferrer">github.com/baaaaan1</a>
+     </div>
+    </section>
+   </div>
+   <div class="sidebar-footer">
+    <button type="button" class="btn btn-secondary logout-btn" id="btn-logout">
+     <span class="material-icons">logout</span>
+     Logout
+    </button>
+   </div>
+  </aside>
+
+  <div class="app-shell">
+   <main class="main">
+    <header class="topbar">
+     <div class="topbar-title">
+      <div class="title" id="panel-title">Cloudflare Email Panel</div>
+      <div class="subtitle" id="welcome-message">Manage routing and inbox in one place</div>
+     </div>
+     <div class="topbar-actions">
+      <button class="btn" id="btn-add-rule">
+       <span class="material-icons">add_circle_outline</span>
+       Add Rule
+      </button>
+     </div>
+    </header>
+
+    <section class="mail-layout">
+     <div class="pane addresses">
+      <div class="pane-header">
+       <div>
+        <div class="pane-title">Addresses</div>
+        <div class="pane-subtitle">Filter inbox by routing address</div>
+       </div>
+       <select id="addressSort" class="pane-select">
+        <option value="name-asc">Nama (A–Z)</option>
+        <option value="name-desc">Nama (Z–A)</option>
+        <option value="newest" data-requires-activity="1">Terbaru</option>
+        <option value="oldest" data-requires-activity="1">Terlama</option>
+       </select>
+      </div>
+      <div class="pane-tools">
+       <span class="material-icons">search</span>
+       <input type="text" id="addressSearch" placeholder="Search addresses">
+      </div>
+      <div class="pane-body" id="address-list"></div>
+      <div class="pane-empty" id="address-empty">No addresses found. Add a rule to get started.</div>
+     </div>
+
+     <div class="pane inbox">
+      <div class="pane-header">
+       <div>
+        <div class="pane-title">Inbox</div>
+        <div class="pane-subtitle" id="inbox-subtitle">Select an address to load messages</div>
+       </div>
+       <button class="btn btn-secondary" id="btn-refresh-inbox">
+        <span class="material-icons">refresh</span>
+        Refresh
+       </button>
+      </div>
+      <div class="pane-tools">
+       <span class="material-icons">search</span>
+       <input type="text" id="inboxSearch" placeholder="Search subject or sender">
+       <select id="inboxSort">
+        <option value="newest">Terbaru</option>
+        <option value="oldest">Terlama</option>
+        <option value="az">A-Z</option>
+       </select>
+      </div>
+      <div class="pane-body inbox-list" id="inbox-list"></div>
+      <div class="pane-empty" id="inbox-empty">Select an address to view messages.</div>
+      <div class="pagination-controls" id="inboxPagination">
+       <button class="btn btn-secondary" id="btn-inbox-prev" disabled>Previous</button>
+       <button class="btn btn-secondary" id="btn-inbox-next" disabled>Next</button>
+      </div>
+     </div>
+    </section>
+   </main>
+  </div>
+
+  <div class="modal-overlay" id="ruleModal">
+   <div class="modal glass-card wide">
+    <div class="modal-header">
+     <h2 class="modal-title" id="modalTitle">Add New Rule</h2>
+     <button class="modal-close" id="btn-modal-close"><span class="material-icons">close</span></button>
+    </div>
+    <div class="modal-body">
+     <form id="ruleForm" class="form-grid">
+      <div class="field">
+       <span class="field-label">Domain</span>
+       <select id="fromDomain" class="form-select"></select>
+      </div>
+      <div class="field">
+       <span class="field-label">Nama Email</span>
+       <input type="text" id="fromLocalPart" class="form-input" placeholder="contoh: halo" required>
+       <span class="field-help" id="fromHelp">Cukup isi nama. Domain pilih di kiri.</span>
+       <span class="field-help field-preview" id="fromPreview">Hasil: nama@domain.com</span>
+       <span class="field-error" id="fromError"></span>
+      </div>
+      <div class="field">
+       <span class="field-label" id="toLabel">Tujuan</span>
+       <input type="text" id="toEmail" class="form-input" placeholder="admin@company.com" required>
+       <select id="workerSelect" class="form-select is-hidden"></select>
+       <span class="field-help" id="toHelp">Tujuan email penerima.</span>
+       <span class="field-error" id="toError"></span>
+      </div>
+      <div class="field">
+       <span class="field-label">Rule Type</span>
+       <select id="ruleType" class="form-select">
+        <option value="forward">Forward</option>
+        <option value="drop">Drop (Delete)</option>
+        <option value="worker">Send to Worker</option>
+       </select>
+      </div>
+      <div class="field">
+       <span class="field-label">Priority</span>
+       <select id="priority" class="form-select">
+        <option value="1">High (1)</option>
+        <option value="5" selected>Normal (5)</option>
+        <option value="10">Low (10)</option>
+       </select>
+      </div>
+      <div class="field">
+       <span class="field-label">Description (Optional)</span>
+       <input type="text" id="description" class="form-input" placeholder="Short note">
+      </div>
+     </form>
+    </div>
+    <div class="modal-actions">
+     <button type="button" class="btn btn-cancel" id="btn-cancel">Cancel</button>
+     <button type="submit" form="ruleForm" class="btn" id="saveBtn"><span class="material-icons">save</span> Save Rule</button>
+    </div>
+   </div>
+  </div>
+
+  <div class="viewer-overlay" id="viewerOverlay">
+   <div class="viewer-panel" id="viewerPanel">
+    <div class="viewer-header">
+     <div>
+      <div class="viewer-subject" id="viewerSubject">Subject</div>
+      <div class="viewer-meta">
+       <span id="viewerFrom">From:</span>
+       <span id="viewerTo">To:</span>
+       <span id="viewerDate">Date:</span>
+      </div>
+     </div>
+     <button class="icon-btn" id="btn-viewer-close"><span class="material-icons">close</span></button>
+    </div>
+    <div class="viewer-tabs">
+     <button class="chip active" id="btn-view-html">HTML</button>
+     <button class="chip" id="btn-view-text">Text</button>
+    </div>
+    <div class="viewer-body" id="emailBodyContainer"></div>
+    <div class="viewer-actions">
+     <button type="button" class="btn btn-danger" id="btn-email-delete"><span class="material-icons">delete</span> Delete</button>
+     <button type="button" class="btn btn-secondary" id="btn-email-close-action">Close</button>
+    </div>
+   </div>
+  </div>
+
+  <script src="/bgStars.js" defer></script>
+  <script src="/main.js" defer></script>
+ </body>
+</html>

@@ -1,0 +1,27 @@
+services:
+  panel:
+    build: .
+    container_name: cf-email-panel
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    volumes:
+      - ./.env:/app/.env
+      - ./.register-request.json:/app/.register-request.json
+
+  bot:
+    build: .
+    container_name: cf-email-bot
+    restart: unless-stopped
+    command: ["node", "bot.js"]
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    volumes:
+      - ./.env:/app/.env
+      - ./.register-request.json:/app/.register-request.json
