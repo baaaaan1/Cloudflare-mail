@@ -11,7 +11,7 @@ Self hosted web panel to manage Cloudflare Email Routing rules, destinations, an
 
 - Address list + inbox filtering per address
 - Rule management (create edit delete toggle)
-- Access key or 2FA login (approved via Telegram bot)
+- Access key, 2FA, or password login (approved via Telegram bot)
 - Multi domain support with domain dropdown
 - Glass UI with theme presets and custom accent
 - Docker ready
@@ -37,6 +37,7 @@ Optional (local dev only):
 ```env
 ALLOW_UNAUTHENTICATED=true
 ```
+Note: auth is required by default. Without any auth configured, the API returns 401 unless `ALLOW_UNAUTHENTICATED=true`.
 
 Optional password login (adds third login option):
 ```bash

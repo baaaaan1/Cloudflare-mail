@@ -36,6 +36,10 @@ CF_D1_DATABASE_ID=d1_database_id
 TELEGRAM_BOT_TOKEN=telegram_bot_token
 TELEGRAM_MASTER_ID=telegram_user_id
 ```
+Optional (local dev only):
+```env
+ALLOW_UNAUTHENTICATED=true
+```
 
 ### 2) API Token Cloudflare
 
@@ -79,6 +83,7 @@ npm run start:bot
 Login di panel butuh approval:
 - Klik "Request Register (10m)" di UI
 - Approve lewat `/register` di bot
+- Jika ingin login password: `/password` (auto-generate) atau `/password 16` atau `/password your_password`
 
 ## Docker
 

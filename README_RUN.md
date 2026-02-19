@@ -34,6 +34,7 @@ npm run start:all
    - `/register 5m` atau `/register 12h`
 3) Bot akan kirim Access Key dan 2FA secret + QR.
 4) Login pakai Access Key atau 2FA Code.
+5) (Opsional) Set password via bot: `/password` atau `/password 16` atau `/password your_password`, lalu login via tab Password.
 
 ## Menggunakan panel
 
@@ -48,10 +49,12 @@ Jika tabel belum ada, jalankan init lewat API (butuh auth):
 ```bash
 curl -X POST http://localhost:3000/api/inbox/init -H "Authorization: Bearer YOUR_ACCESS_KEY"
 ```
+Catatan: Header ini hanya berlaku jika Access Key diaktifkan. Jika pakai password/2FA, login via browser dan gunakan session cookie.
 
 ## Docker
 
 ```bash
+echo "{\"pending\":null}" > .register-request.json
 docker compose up -d
 ```
 
