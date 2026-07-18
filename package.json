@@ -5,11 +5,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "start:ps": "powershell -ExecutionPolicy Bypass -File start.ps1",
-    "setup": "node setup.js",
-    "deploy:worker": "cd worker && npx wrangler deploy",
-    "start:bot": "node bot.js",
-    "start:all": "npx concurrently \"npm start\" \"npm run start:bot\""
+    "deploy:worker": "cd worker && npx wrangler deploy"
   },
   "license": "ISC",
 "dependencies": {

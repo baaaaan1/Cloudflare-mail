@@ -19,36 +19,49 @@
   <button class="sidebar-handle" id="sidebarHandle" type="button" aria-label="Toggle sidebar">
    <span class="material-icons" id="sidebarHandleIcon">chevron_left</span>
   </button>
+  <!-- Login Modal (Password only) -->
   <div class="modal-overlay login-overlay" id="loginModal">
    <div class="modal glass-card">
     <div class="modal-header">
-     <h2 class="modal-title">Welcome Back</h2>
+     <h2 class="modal-title">Login</h2>
     </div>
     <div class="modal-body">
-    <div class="auth-toggle" id="authToggle">
-      <button type="button" class="auth-toggle-btn active" data-auth="token">Access Key</button>
-      <button type="button" class="auth-toggle-btn" data-auth="tfa">2FA Code</button>
-      <button type="button" class="auth-toggle-btn" data-auth="password">Password</button>
-    </div>
      <div class="auth-notice is-hidden" id="authNotice"></div>
      <form id="loginForm">
-      <div class="form-group" id="accessTokenGroup">
-       <label class="form-label" for="accessToken">Access Key</label>
-       <input type="password" id="accessToken" class="form-input" placeholder="Enter your access key" required>
-      </div>
-      <div class="form-group is-hidden" id="tfaTokenGroup">
-       <label class="form-label" for="tfaToken">2FA Code</label>
-       <input type="text" id="tfaToken" class="form-input" placeholder="Enter your 2FA code" inputmode="numeric" autocomplete="one-time-code">
-      </div>
-      <div class="form-group is-hidden" id="passwordGroup">
+      <div class="form-group" id="passwordGroup">
        <label class="form-label" for="passwordInput">Password</label>
-       <input type="password" id="passwordInput" class="form-input" placeholder="Enter your password" autocomplete="current-password">
+       <input type="password" id="passwordInput" class="form-input" placeholder="Enter your password" autocomplete="current-password" required>
       </div>
      </form>
     </div>
     <div class="modal-actions">
-     <button type="button" class="btn btn-secondary" id="btn-register-request">Request Register (10m)</button>
      <button type="submit" form="loginForm" class="btn" id="loginSubmitBtn">Login</button>
+    </div>
+   </div>
+  </div>
+
+  <!-- Setup Password Modal (first time) -->
+  <div class="modal-overlay" id="setupPasswordModal">
+   <div class="modal glass-card">
+    <div class="modal-header">
+     <h2 class="modal-title">Set Password</h2>
+    </div>
+    <div class="modal-body">
+     <div class="auth-notice is-hidden" id="setupNotice"></div>
+     <p class="field-help">Password belum dikonfigurasi. Buat password untuk mengamankan panel.</p>
+     <form id="setupPasswordForm">
+      <div class="form-group">
+       <label class="form-label" for="newPassword">New Password</label>
+       <input type="password" id="newPassword" class="form-input" placeholder="Minimal 8 karakter" minlength="8" required>
+      </div>
+      <div class="form-group">
+       <label class="form-label" for="confirmPassword">Confirm Password</label>
+       <input type="password" id="confirmPassword" class="form-input" placeholder="Ulangi password" minlength="8" required>
+      </div>
+     </form>
+    </div>
+    <div class="modal-actions">
+     <button type="submit" form="setupPasswordForm" class="btn" id="setupPasswordBtn">Set Password</button>
     </div>
    </div>
   </div>
@@ -159,6 +172,8 @@
        </div>
       </div>
       <button class="btn btn-secondary" id="btn-check-status">Check Status</button>
+      <button class="btn btn-secondary" id="btn-diagnostics" type="button">Run Diagnostics</button>
+      <div class="diagnostics-result is-hidden" id="diagnosticsResult"></div>
      </div>
     </section>
 
@@ -201,16 +216,18 @@
         <div class="pane-title">Addresses</div>
         <div class="pane-subtitle">Filter inbox by routing address</div>
        </div>
-       <select id="addressSort" class="pane-select">
-        <option value="name-asc">Nama (A–Z)</option>
-        <option value="name-desc">Nama (Z–A)</option>
-        <option value="newest" data-requires-activity="1">Terbaru</option>
-        <option value="oldest" data-requires-activity="1">Terlama</option>
-       </select>
+        <select id="addressSort" class="pane-select">
+         <option value="name-asc">Email A–Z</option>
+         <option value="name-desc">Email Z–A</option>
+         <option value="message-newest" data-requires-activity="1">Pesan terbaru</option>
+         <option value="message-oldest" data-requires-activity="1">Pesan terlama</option>
+         <option value="created-newest">Email dibuat terbaru</option>
+         <option value="created-oldest">Email dibuat terlama</option>
+        </select>
       </div>
       <div class="pane-tools">
        <span class="material-icons">search</span>
-       <input type="text" id="addressSearch" placeholder="Search addresses">
+        <input type="text" id="addressSearch" placeholder="Cari email, domain, tujuan, type">
       </div>
       <div class="pane-body" id="address-list"></div>
       <div class="pane-empty" id="address-empty">No addresses found. Add a rule to get started.</div>
@@ -229,11 +246,14 @@
       </div>
       <div class="pane-tools">
        <span class="material-icons">search</span>
-       <input type="text" id="inboxSearch" placeholder="Search subject or sender">
+        <input type="text" id="inboxSearch" placeholder="Cari subject, sender, recipient, domain">
        <select id="inboxSort">
         <option value="newest">Terbaru</option>
         <option value="oldest">Terlama</option>
-        <option value="az">A-Z</option>
+         <option value="sender-az">Sender A-Z</option>
+         <option value="sender-za">Sender Z-A</option>
+         <option value="recipient-az">Penerima A-Z</option>
+         <option value="recipient-za">Penerima Z-A</option>
        </select>
       </div>
       <div class="pane-body inbox-list" id="inbox-list"></div>
@@ -261,7 +281,18 @@
       </div>
       <div class="field">
        <span class="field-label">Nama Email</span>
-       <input type="text" id="fromLocalPart" class="form-input" placeholder="contoh: halo" required>
+        <div class="input-group email-name-generator">
+         <input type="text" id="fromLocalPart" class="form-input" placeholder="contoh: halo" required>
+         <div class="input-actions">
+          <select id="emailNameStyle" class="form-select" aria-label="Gaya nama email">
+           <option value="id">Indonesia</option>
+           <option value="us">US</option>
+          </select>
+          <button type="button" class="icon-btn-sm" id="btn-generate-email-name" title="Generate nama email" aria-label="Generate nama email">
+           <span class="material-icons">autorenew</span>
+          </button>
+         </div>
+        </div>
        <span class="field-help" id="fromHelp">Cukup isi nama. Domain pilih di kiri.</span>
        <span class="field-help field-preview" id="fromPreview">Hasil: nama@domain.com</span>
        <span class="field-error" id="fromError"></span>

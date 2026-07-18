@@ -1,5 +1,5 @@
-
 // main.js - Glassmorphism mail client UI for Cloudflare Email Panel
+// Simplified: Password-only auth, private mode
 const defaultConfig = {
   panel_title: 'Cloudflare Email Panel',
   welcome_message: 'Manage routing and inbox in one place'
@@ -11,13 +11,18 @@ const state = {
   addresses: [],
   selectedAddress: null,
   addressActivity: {},
+  inboxSummary: {},
   inbox: [],
   inboxPage: 0,
   inboxLimit: 20,
   domains: [],
   domainsLoaded: false,
+  domainsLoading: false,
+  domainsError: null,
+  savingRule: false,
   workers: [],
   workersLoaded: false,
+  workersLoading: false,
   workersError: null,
   editingRuleId: null,
   editingRuleZoneId: null,
@@ -25,19 +30,7 @@ const state = {
   currentEmailData: null
 };
 
-let authMode = 'token';
-let authOptions = {
-  token: true,
-  tfa: true,
-  password: false,
-  authRequired: false,
-  tokenExpired: false,
-  tfaExpired: false,
-  registerPending: false,
-  registerExpiresAt: null
-};
-let registerCooldownTimer = null;
-let registerPollTimer = null;
+let sessionOk = false;
 
 const accentPresets = {
   ocean: { accent: '#5aa9ff', accent2: '#7fd1ff', accent3: '#3c6fff' },
@@ -48,23 +41,69 @@ const accentPresets = {
 
 const ADDRESS_SORT_KEY = 'addressSort';
 const ADDRESS_ACTIVITY_KEY = 'addressActivity';
+const emailNameParts = {
+  id: {
+    first: ['aditya', 'agung', 'andika', 'bagas', 'bima', 'dewi', 'dimas', 'farhan', 'fajar', 'fitri', 'galih', 'hana', 'indah', 'joko', 'kurnia', 'lina', 'maulana', 'nabila', 'putra', 'rani', 'reza', 'rizky', 'salsa', 'tiara', 'wahyu', 'yusuf'],
+    last: ['ananda', 'cahaya', 'hidayat', 'kurniawan', 'maharani', 'maulana', 'nugraha', 'permata', 'pratama', 'putri', 'ramadhan', 'saputra', 'setiawan', 'syahputra', 'wijaya']
+  },
+  us: {
+    first: ['alex', 'amelia', 'ava', 'benjamin', 'charlotte', 'daniel', 'elijah', 'emma', 'ethan', 'harper', 'henry', 'isabella', 'james', 'liam', 'lucas', 'mia', 'noah', 'olivia', 'sophia', 'theodore', 'william', 'zoe'],
+    last: ['anderson', 'bennett', 'brown', 'carter', 'cooper', 'davis', 'edwards', 'garcia', 'harris', 'johnson', 'martin', 'miller', 'mitchell', 'roberts', 'smith', 'thompson', 'wilson']
+  }
+};
+
+function randomItem(items) {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+function generateEmailName() {
+  const style = document.getElementById('emailNameStyle')?.value === 'us' ? 'us' : 'id';
+  const parts = emailNameParts[style];
+  const suffix = String(Math.floor(Math.random() * 900) + 100);
+  const localPart = `${randomItem(parts.first)}.${randomItem(parts.last)}${suffix}`;
+  const input = document.getElementById('fromLocalPart');
+  if (!input) return;
+  input.value = localPart;
+  updateFromPreview();
+  validateRuleForm();
+  input.focus();
+}
 
 async function api(path, opts) {
   const headers = { 'Content-Type': 'application/json' };
   const res = await fetch(path, Object.assign({ headers, credentials: 'include' }, opts));
   if (res.status === 401) {
-    setLoginVisible(true);
+    sessionOk = false;
+    showLogin();
     throw new Error('Unauthorized');
   }
   if (!res.ok) throw new Error((await res.text()) || res.statusText);
   return res.json();
 }
 
-function setLoginVisible(show) {
+function showLogin() {
   const modal = document.getElementById('loginModal');
-  if (!modal) return;
-  modal.classList.toggle('active', show);
-  document.body.classList.toggle('login-active', show);
+  if (modal) modal.classList.add('active');
+  document.body.classList.add('login-active');
+  const setupModal = document.getElementById('setupPasswordModal');
+  if (setupModal) setupModal.classList.remove('active');
+}
+
+function hideLogin() {
+  const modal = document.getElementById('loginModal');
+  if (modal) modal.classList.remove('active');
+  document.body.classList.remove('login-active');
+}
+
+function showSetupPassword() {
+  hideLogin();
+  const modal = document.getElementById('setupPasswordModal');
+  if (modal) modal.classList.add('active');
+}
+
+function hideSetupPassword() {
+  const modal = document.getElementById('setupPasswordModal');
+  if (modal) modal.classList.remove('active');
 }
 
 function showNotification(message, type = 'success') {
@@ -83,13 +122,6 @@ function showNotification(message, type = 'success') {
     notification.style.transform = 'translateX(100%)';
     setTimeout(() => notification.remove(), 300);
   }, 3000);
-}
-
-function clearLegacyAuthStorage() {
-  try {
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('sessionId');
-  } catch {}
 }
 
 function hexToRgb(hex) {
@@ -194,6 +226,36 @@ function getAddressActivity(address) {
   return state.addressActivity[address.toLowerCase()] || 0;
 }
 
+function formatRelativeTime(value) {
+  const time = value instanceof Date ? value.getTime() : new Date(value || 0).getTime();
+  if (!Number.isFinite(time) || time <= 0) return '-';
+  const diff = Date.now() - time;
+  const abs = Math.abs(diff);
+  const units = [
+    ['tahun', 365 * 24 * 60 * 60 * 1000],
+    ['bulan', 30 * 24 * 60 * 60 * 1000],
+    ['hari', 24 * 60 * 60 * 1000],
+    ['jam', 60 * 60 * 1000],
+    ['menit', 60 * 1000]
+  ];
+  for (const [label, ms] of units) {
+    if (abs >= ms) {
+      const amount = Math.max(1, Math.floor(abs / ms));
+      return diff >= 0 ? `${amount} ${label} lalu` : `dalam ${amount} ${label}`;
+    }
+  }
+  return 'baru saja';
+}
+
+function getRuleTimestamp(rule) {
+  const candidates = [rule.created_at, rule.created, rule.created_on, rule.modified_at, rule.modified_on];
+  for (const value of candidates) {
+    const time = new Date(value || 0).getTime();
+    if (Number.isFinite(time) && time > 0) return time;
+  }
+  return 0;
+}
+
 function hasActivityData() {
   return Object.values(state.addressActivity).some((value) => Number(value) > 0);
 }
@@ -208,9 +270,7 @@ function applyTheme(mode, persist = false) {
   const themeText = document.getElementById('theme-text');
   if (themeIcon) themeIcon.textContent = isDark ? 'light_mode' : 'dark_mode';
   if (themeText) themeText.textContent = isDark ? 'Light' : 'Dark';
-  if (persist) {
-    localStorage.setItem('theme', mode);
-  }
+  if (persist) localStorage.setItem('theme', mode);
 }
 
 function toggleTheme() {
@@ -227,9 +287,7 @@ function loadTheme() {
     applyTheme(preferred, false);
     if (themeQuery) {
       themeQuery.addEventListener('change', (event) => {
-        if (!localStorage.getItem('theme')) {
-          applyTheme(event.matches ? 'dark' : 'light', false);
-        }
+        if (!localStorage.getItem('theme')) applyTheme(event.matches ? 'dark' : 'light', false);
       });
     }
   }
@@ -265,13 +323,14 @@ function toggleSidebar() {
   setSidebarState(current === 'open' ? 'collapsed' : 'open');
 }
 
-async function fetchAuthStatus() {
+async function checkSession() {
   try {
-    const res = await fetch('/api/auth-status');
-    if (!res.ok) return null;
-    return await res.json();
+    await api('/api/session');
+    sessionOk = true;
+    return true;
   } catch {
-    return null;
+    sessionOk = false;
+    return false;
   }
 }
 
@@ -288,250 +347,65 @@ function setAuthNotice(message, tone = 'warning') {
   notice.classList.remove('is-hidden');
 }
 
-function isTokenUsable() {
-  return authOptions.token && !authOptions.tokenExpired && !authOptions.registerPending;
-}
-
-function isTfaUsable() {
-  return authOptions.tfa && !authOptions.tfaExpired && !authOptions.registerPending;
-}
-
-function isPasswordUsable() {
-  return authOptions.password && !authOptions.registerPending;
-}
-
-async function checkSession() {
-  try {
-    await api('/api/session');
-    return true;
-  } catch {
-    return false;
-  }
-}
-function updateRegisterButton() {
-  const btn = document.getElementById('btn-register-request');
-  if (!btn) return;
-  const expiresAt = authOptions.registerExpiresAt || parseInt(localStorage.getItem('registerCooldownUntil') || '0', 10);
-  const now = Date.now();
-  if (authOptions.registerPending && !expiresAt) {
-    btn.disabled = true;
-    btn.textContent = 'Request Pending (approve in bot)';
+function setSetupNotice(message, tone = 'warning') {
+  const notice = document.getElementById('setupNotice');
+  if (!notice) return;
+  if (!message) {
+    notice.textContent = '';
+    notice.className = 'auth-notice is-hidden';
     return;
   }
-  if (expiresAt && expiresAt > now) {
-    btn.disabled = true;
-    btn.textContent = 'Request Pending (approve in bot)';
-  } else {
-    btn.disabled = false;
-    btn.textContent = 'Request Register (10m)';
-    if (expiresAt && expiresAt <= now) {
-      localStorage.removeItem('registerCooldownUntil');
-      if (authOptions.registerPending) {
-        authOptions.registerPending = false;
-        authOptions.registerExpiresAt = null;
-        if (authOptions.tokenExpired || authOptions.tfaExpired) {
-          setAuthNotice('Login expired. Request a new token from the bot.', 'warning');
-        } else {
-          setAuthNotice('');
-        }
-        setLoginDisabled(false);
-      }
-    }
-  }
-  if (registerCooldownTimer) {
-    clearTimeout(registerCooldownTimer);
-    registerCooldownTimer = null;
-  }
-  if (expiresAt && expiresAt > now) {
-    registerCooldownTimer = setTimeout(updateRegisterButton, expiresAt - now + 500);
-  }
+  notice.textContent = message;
+  notice.className = `auth-notice ${tone}`;
+  notice.classList.remove('is-hidden');
 }
 
-function setLoginDisabled(disabled) {
-  const accessInput = document.getElementById('accessToken');
-  const tfaInput = document.getElementById('tfaToken');
-  const passwordInput = document.getElementById('passwordInput');
-  const submitBtn = document.getElementById('loginSubmitBtn');
-  if (accessInput) accessInput.disabled = disabled;
-  if (tfaInput) tfaInput.disabled = disabled;
-  if (passwordInput) passwordInput.disabled = disabled;
-  if (submitBtn) submitBtn.disabled = disabled;
-  document.querySelectorAll('.auth-toggle-btn').forEach((btn) => {
-    const mode = btn.dataset.auth;
-    const isUsable = mode === 'token' ? isTokenUsable() : mode === 'tfa' ? isTfaUsable() : isPasswordUsable();
-    btn.disabled = disabled || !isUsable;
-    btn.classList.toggle('disabled', btn.disabled);
-  });
-}
-
-async function requestRegister() {
-  const btn = document.getElementById('btn-register-request');
-  if (!btn || btn.disabled) return;
-  const originalText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Requesting...';
-  try {
-    const res = await fetch('/api/register-request', { method: 'POST' });
-    let data = null;
-    try { data = await res.json(); } catch {}
-    if (!res.ok) {
-      if (res.status === 429 && data && data.expiresAt) {
-        authOptions.registerPending = true;
-        authOptions.registerExpiresAt = data.expiresAt;
-        localStorage.setItem('registerCooldownUntil', String(data.expiresAt));
-        setAuthNotice('Register request already pending. Approve in bot.', 'warning');
-        setLoginDisabled(true);
-        updateRegisterButton();
-        return;
-      }
-      throw new Error((data && data.error) || res.statusText);
-    }
-    authOptions.registerPending = true;
-    authOptions.registerExpiresAt = data && data.expiresAt ? data.expiresAt : null;
-    if (authOptions.registerExpiresAt) {
-      localStorage.setItem('registerCooldownUntil', String(authOptions.registerExpiresAt));
-    }
-    setAuthNotice('Request sent. Approve in bot to continue.', 'warning');
-    setLoginDisabled(true);
-    updateRegisterButton();
-    startRegisterPolling();
-  } catch (e) {
-    showNotification('Register request failed: ' + e.message, 'error');
-    btn.disabled = false;
-    btn.textContent = originalText;
-  }
-}
-
-function startRegisterPolling() {
-  if (registerPollTimer) return;
-  registerPollTimer = setInterval(async () => {
-    const status = await fetchAuthStatus();
-    if (!status) return;
-    const wasPending = authOptions.registerPending;
-    authOptions.registerPending = !!status.registerPending;
-    authOptions.registerExpiresAt = status.registerExpiresAt || null;
-    authOptions.token = !!status.accessTokenEnabled;
-    authOptions.tfa = !!status.tfaEnabled;
-    authOptions.password = !!status.passwordEnabled;
-    authOptions.authRequired = !!status.authRequired;
-    authOptions.tokenExpired = !!status.tokenExpired;
-    authOptions.tfaExpired = !!status.tfaExpired;
-    updateRegisterButton();
-    if (!authOptions.registerPending) {
-      if (authOptions.tokenExpired || authOptions.tfaExpired) {
-        setAuthNotice('Login expired. Request a new token from the bot.', 'warning');
-      } else {
-        setAuthNotice('');
-      }
-      setLoginDisabled(false);
-      setAuthMode(authMode);
-      clearInterval(registerPollTimer);
-      registerPollTimer = null;
-    } else if (!wasPending) {
-      setLoginDisabled(true);
-    }
-  }, 10000);
-}
-
-function setAuthMode(mode) {
-  const preferred = mode;
-  const candidates = preferred ? [preferred, 'token', 'tfa', 'password'] : ['token', 'tfa', 'password'];
-  let resolved = preferred || 'token';
-  for (const candidate of candidates) {
-    if (candidate === 'token' && isTokenUsable()) { resolved = 'token'; break; }
-    if (candidate === 'tfa' && isTfaUsable()) { resolved = 'tfa'; break; }
-    if (candidate === 'password' && isPasswordUsable()) { resolved = 'password'; break; }
-  }
-  authMode = resolved;
-  const accessGroup = document.getElementById('accessTokenGroup');
-  const tfaGroup = document.getElementById('tfaTokenGroup');
-  const accessInput = document.getElementById('accessToken');
-  const tfaInput = document.getElementById('tfaToken');
-  const passwordGroup = document.getElementById('passwordGroup');
-  const passwordInput = document.getElementById('passwordInput');
-  const submitBtn = document.getElementById('loginSubmitBtn');
-  document.querySelectorAll('.auth-toggle-btn').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.auth === authMode);
-  });
-  const isToken = authMode === 'token';
-  const isTfa = authMode === 'tfa';
-  const isPassword = authMode === 'password';
-  if (accessGroup) accessGroup.classList.toggle('is-hidden', !isToken);
-  if (tfaGroup) tfaGroup.classList.toggle('is-hidden', !isTfa);
-  if (passwordGroup) passwordGroup.classList.toggle('is-hidden', !isPassword);
-  if (accessInput) accessInput.required = isToken;
-  if (tfaInput) tfaInput.required = isTfa;
-  if (passwordInput) passwordInput.required = isPassword;
-  if (submitBtn) submitBtn.textContent = isTfa ? 'Verify' : 'Login';
-}
-
-async function handleAuth(event) {
+async function handleLogin(event) {
   event.preventDefault();
-  if (authOptions.registerPending) {
-    showNotification('Register request pending approval in bot.', 'error');
+  const password = document.getElementById('passwordInput').value;
+  if (!password) {
+    showNotification('Password required', 'error');
     return;
   }
-  if (authMode === 'token') {
-    if (!authOptions.token) {
-      showNotification('Access key not available', 'error');
-      return;
-    }
-    if (authOptions.tokenExpired) {
-      showNotification('Access key expired. Generate a new token in the bot.', 'error');
-      return;
-    }
-    const token = document.getElementById('accessToken').value.trim();
-    if (!token) {
-      showNotification('Access key required', 'error');
-      return;
-    }
-    try {
-      await api('/api/login', { method: 'POST', body: JSON.stringify({ token }) });
-      setLoginVisible(false);
-      loadRules();
-    } catch (e) {
-      showNotification('Login failed: ' + e.message, 'error');
-    }
-  } else if (authMode === 'password') {
-    if (!authOptions.password) {
-      showNotification('Password login not available', 'error');
-      return;
-    }
-    const password = document.getElementById('passwordInput').value;
-    if (!password) {
-      showNotification('Password required', 'error');
-      return;
-    }
-    try {
-      await api('/api/login-password', { method: 'POST', body: JSON.stringify({ password }) });
-      setLoginVisible(false);
-      loadRules();
-    } catch (e) {
-      showNotification('Login failed: ' + e.message, 'error');
-    }
-  } else {
-    if (!authOptions.tfa) {
-      showNotification('2FA not available', 'error');
-      return;
-    }
-    if (authOptions.tfaExpired) {
-      showNotification('2FA expired. Generate a new token in the bot.', 'error');
-      return;
-    }
-    const code = document.getElementById('tfaToken').value.trim();
-    if (!code) {
-      showNotification('2FA code required', 'error');
-      return;
-    }
-    try {
-      await api('/api/verify-2fa', { method: 'POST', body: JSON.stringify({ token: code }) });
-      setLoginVisible(false);
-      loadRules();
-    } catch (e) {
-      showNotification('2FA verification failed: ' + e.message, 'error');
-    }
+  try {
+    await api('/api/login', { method: 'POST', body: JSON.stringify({ password }) });
+    hideLogin();
+    sessionOk = true;
+    await loadRules();
+  } catch (e) {
+    showNotification('Login failed: ' + e.message, 'error');
   }
 }
+
+async function handleSetupPassword(event) {
+  event.preventDefault();
+  const password = document.getElementById('newPassword').value;
+  const confirm = document.getElementById('confirmPassword').value;
+  if (password !== confirm) {
+    setSetupNotice('Password tidak cocok!', 'error');
+    return;
+  }
+  if (password.length < 8) {
+    setSetupNotice('Password minimal 8 karakter', 'error');
+    return;
+  }
+  setSetupNotice('');
+  try {
+    const res = await fetch('/api/setup-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Gagal set password');
+    showNotification(data.message || 'Password berhasil diset!', 'success');
+    hideSetupPassword();
+    showLogin();
+  } catch (e) {
+    setSetupNotice(e.message, 'error');
+  }
+}
+
 function updateApiStatus(overallStatus = 'success', data = null) {
   const dot = document.querySelector('#api-status .status-dot');
   const desc = document.getElementById('api-status-desc');
@@ -591,6 +465,7 @@ function handleSettingsAction(event) {
     copyToClipboard(input.value.trim(), 'Disalin ke clipboard', 'Gagal menyalin');
   }
 }
+
 async function checkApiStatus(buttonEl) {
   const button = buttonEl;
   const originalContent = button.textContent;
@@ -603,6 +478,35 @@ async function checkApiStatus(buttonEl) {
   } catch (e) {
     updateApiStatus('error');
     showNotification('Health failed: ' + e.message, 'error');
+  } finally {
+    button.textContent = originalContent;
+    button.disabled = false;
+  }
+}
+
+async function runDiagnostics(buttonEl) {
+  const button = buttonEl;
+  const resultEl = document.getElementById('diagnosticsResult');
+  const originalContent = button.textContent;
+  button.textContent = 'Running...';
+  button.disabled = true;
+  try {
+    const data = await api('/api/diagnostics');
+    if (!resultEl) return;
+    resultEl.classList.remove('is-hidden');
+    let html = `<div class="diag-summary ${data.ok ? 'ok' : 'fail'}">${data.ok ? 'All checks passed' : 'Some checks failed'}</div>`;
+    html += '<ul class="diag-list">';
+    (data.checks || []).forEach((c) => {
+      html += `<li class="diag-item ${c.ok ? 'ok' : 'fail'}">`;
+      html += `<span class="diag-name">${escapeHtml(c.name)}</span>`;
+      html += `<span class="diag-detail">${escapeHtml(c.detail)}</span>`;
+      if (!c.ok && c.hint) html += `<span class="diag-hint">${escapeHtml(c.hint)}</span>`;
+      html += '</li>';
+    });
+    html += '</ul>';
+    resultEl.innerHTML = html;
+  } catch (e) {
+    showNotification('Diagnostics failed: ' + e.message, 'error');
   } finally {
     button.textContent = originalContent;
     button.disabled = false;
@@ -643,12 +547,20 @@ async function saveSettings(e) {
 
 async function loadDomains(force = false) {
   if (state.domainsLoaded && !force) return state.domains;
+  state.domainsLoading = true;
+  state.domainsError = null;
+  updateDomainSelect();
   try {
     const domains = await api('/api/domains');
     state.domains = Array.isArray(domains) ? domains : [];
+    if (!Array.isArray(domains)) {
+      state.domainsError = 'Format daftar domain tidak valid';
+    }
   } catch (e) {
     state.domains = [];
+    state.domainsError = e.message || 'Gagal memuat domain';
   }
+  state.domainsLoading = false;
   state.domainsLoaded = true;
   updateDomainSelect();
   return state.domains;
@@ -656,16 +568,26 @@ async function loadDomains(force = false) {
 
 async function loadWorkers(force = false) {
   if (state.workersLoaded && !force) return state.workers;
+  if (state.workersLoading) return state.workers;
+  state.workersLoading = true;
+  state.workersError = null;
+  updateWorkerSelect();
   try {
     const workers = await api('/api/workers');
     state.workers = Array.isArray(workers) ? workers : [];
     state.workersError = null;
+    if (!Array.isArray(workers)) state.workersError = 'Format daftar worker tidak valid';
   } catch (e) {
     state.workers = [];
     state.workersError = e.message || 'Gagal memuat worker';
   }
+  state.workersLoading = false;
   state.workersLoaded = true;
   updateWorkerSelect();
+  if (document.getElementById('ruleType')?.value === 'worker') {
+    updateRuleTypeUI();
+    validateRuleForm();
+  }
   return state.workers;
 }
 
@@ -673,6 +595,14 @@ function updateWorkerSelect(selectedName = null) {
   const select = document.getElementById('workerSelect');
   if (!select) return;
   select.innerHTML = '';
+  if (state.workersLoading) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'Memuat worker...';
+    select.appendChild(opt);
+    select.disabled = true;
+    return;
+  }
   if (!state.workersLoaded) {
     const opt = document.createElement('option');
     opt.value = '';
@@ -722,6 +652,22 @@ function updateDomainSelect(selectedId = null) {
   const select = document.getElementById('fromDomain');
   if (!select) return;
   select.innerHTML = '';
+  if (state.domainsLoading) {
+    select.disabled = true;
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'Memuat domain...';
+    select.appendChild(opt);
+    return;
+  }
+  if (state.domainsError) {
+    select.disabled = true;
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'Gagal memuat domain';
+    select.appendChild(opt);
+    return;
+  }
   if (!state.domains.length) {
     select.disabled = true;
     const opt = document.createElement('option');
@@ -732,12 +678,42 @@ function updateDomainSelect(selectedId = null) {
   }
   select.disabled = false;
   state.domains.forEach((domain) => {
+    if (!domain || !domain.id || !domain.name) return;
     const opt = document.createElement('option');
     opt.value = domain.id;
     opt.textContent = domain.name;
+    opt.dataset.name = domain.name;
     select.appendChild(opt);
   });
-  if (selectedId) select.value = selectedId;
+  if (!select.options.length) {
+    select.disabled = true;
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'Domain list unavailable';
+    select.appendChild(opt);
+    return;
+  }
+  if (selectedId && Array.from(select.options).some((opt) => opt.value === selectedId)) {
+    select.value = selectedId;
+  }
+}
+
+function getSelectedDomain() {
+  const select = document.getElementById('fromDomain');
+  if (!select || select.disabled || !select.value) return null;
+  const option = select.options[select.selectedIndex];
+  const id = select.value.trim();
+  const name = (option?.dataset?.name || option?.textContent || '').trim();
+  if (!id || !name) return null;
+  return { id, name };
+}
+
+function getDomainValidationError() {
+  if (state.domainsLoading) return 'Daftar domain sedang dimuat.';
+  if (state.domainsError) return 'Gagal memuat domain.';
+  if (!state.domains.length) return 'Daftar domain kosong.';
+  if (!getSelectedDomain()) return 'Pilih domain yang valid.';
+  return '';
 }
 
 function getRuleMapKey(ruleId, zoneId) {
@@ -752,7 +728,7 @@ async function loadRules() {
       const requests = state.domains.map((domain) =>
         api(`/api/rules?zoneId=${encodeURIComponent(domain.id)}`)
           .then((data) => ({ status: 'ok', domain, data }))
-          .catch(() => ({ status: 'error', domain, data: [] }))
+          .catch((err) => ({ status: 'error', domain, data: [], error: err.message }))
       );
       const results = await Promise.all(requests);
       results.forEach((result) => {
@@ -762,20 +738,51 @@ async function loadRules() {
             rule.zoneName = result.domain.name;
             rules.push(rule);
           });
+        } else {
+          // Rule access may be unavailable; keep the login UI free of API permission messages.
         }
       });
+      setAuthNotice('');
     } else {
-      const data = await api('/api/rules');
-      rules = data.map((rule) => ({ ...rule, zoneId: null, zoneName: '' }));
+      try {
+        const data = await api('/api/rules');
+        rules = data.map((rule) => ({ ...rule, zoneId: null, zoneName: '' }));
+        setAuthNotice('');
+      } catch (err) {
+        setAuthNotice('');
+      }
     }
     state.rules = rules;
     state.ruleMap = new Map();
     rules.forEach((rule) => {
       state.ruleMap.set(getRuleMapKey(rule.id, rule.zoneId), rule);
     });
+    await loadInboxSummary();
     buildAddressList();
   } catch (e) {
     showNotification('Load rules failed: ' + e.message, 'error');
+  }
+}
+
+async function loadInboxSummary() {
+  try {
+    const rows = await api('/api/inbox/summary');
+    const summary = {};
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const recipient = String(row.recipient || '').trim().toLowerCase();
+      if (!recipient) return;
+      const latest = new Date(row.latest_at || 0).getTime();
+      const first = new Date(row.first_at || 0).getTime();
+      summary[recipient] = {
+        latestAt: Number.isFinite(latest) ? latest : 0,
+        firstAt: Number.isFinite(first) ? first : 0,
+        total: Number(row.total || 0)
+      };
+      if (Number.isFinite(latest) && latest > 0) setAddressActivity(recipient, latest);
+    });
+    state.inboxSummary = summary;
+  } catch {
+    state.inboxSummary = {};
   }
 }
 
@@ -786,6 +793,8 @@ function buildAddressList() {
     if (!address) return;
     const key = address.toLowerCase();
     const action = rule.actions && rule.actions[0] ? rule.actions[0] : {};
+    const summary = state.inboxSummary[key] || {};
+    const createdAt = getRuleTimestamp(rule);
     const existing = map.get(key) || {
       address,
       count: 0,
@@ -795,9 +804,15 @@ function buildAddressList() {
       type: action.type || 'forward',
       enabled: !!rule.enabled,
       destination: Array.isArray(action.value) ? action.value[0] : action.value,
-      lastActivity: getAddressActivity(address)
+      lastActivity: summary.latestAt || getAddressActivity(address),
+      firstActivity: summary.firstAt || 0,
+      messageCount: summary.total || 0,
+      createdAt
     };
     existing.count += 1;
+    existing.lastActivity = Math.max(existing.lastActivity || 0, summary.latestAt || getAddressActivity(address));
+    existing.messageCount = Math.max(existing.messageCount || 0, summary.total || 0);
+    existing.createdAt = existing.createdAt ? Math.min(existing.createdAt, createdAt || existing.createdAt) : createdAt;
     map.set(key, existing);
   });
   state.addresses = Array.from(map.values());
@@ -810,18 +825,34 @@ function renderAddressList() {
   const empty = document.getElementById('address-empty');
   const search = (document.getElementById('addressSearch').value || '').trim().toLowerCase();
   const sortValue = document.getElementById('addressSort')?.value || 'name-asc';
-  let items = state.addresses.filter((item) => !search || item.address.toLowerCase().includes(search));
+  let items = state.addresses.filter((item) => {
+    if (!search) return true;
+    return [item.address, item.zoneName, item.type, item.destination]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+      .includes(search);
+  });
   items = [...items].sort((a, b) => {
     const nameA = a.address.toLowerCase();
     const nameB = b.address.toLowerCase();
     if (sortValue === 'name-desc') return nameB.localeCompare(nameA);
-    if (sortValue === 'newest' || sortValue === 'oldest') {
+    if (sortValue === 'message-newest' || sortValue === 'message-oldest') {
       const aTime = a.lastActivity || 0;
       const bTime = b.lastActivity || 0;
-      if (!aTime && !bTime) {
-        return nameA.localeCompare(nameB);
-      }
-      return sortValue === 'newest' ? bTime - aTime : aTime - bTime;
+      if (!aTime && !bTime) return nameA.localeCompare(nameB);
+      if (!aTime) return 1;
+      if (!bTime) return -1;
+      return sortValue === 'message-newest' ? bTime - aTime : aTime - bTime;
+    }
+    if (sortValue === 'created-newest' || sortValue === 'created-oldest') {
+      // Use createdAt if available, otherwise fallback to lastActivity
+      const aTime = a.createdAt || a.lastActivity || 0;
+      const bTime = b.createdAt || b.lastActivity || 0;
+      if (!aTime && !bTime) return nameA.localeCompare(nameB);
+      if (!aTime) return 1;
+      if (!bTime) return -1;
+      return sortValue === 'created-newest' ? bTime - aTime : aTime - bTime;
     }
     return nameA.localeCompare(nameB);
   });
@@ -832,6 +863,9 @@ function renderAddressList() {
     const localPart = atIndex > -1 ? fullAddress.slice(0, atIndex) : fullAddress;
     const domainPart = atIndex > -1 ? fullAddress.slice(atIndex + 1) : '';
     const domainLabel = domainPart ? `@${domainPart}` : '';
+    const lastLabel = item.lastActivity ? formatRelativeTime(item.lastActivity) : '-';
+    const createdLabel = item.createdAt ? formatRelativeTime(item.createdAt) : '-';
+    const destinationLabel = item.destination ? String(item.destination) : '-';
     const el = document.createElement('div');
     el.className = `address-item${state.selectedAddress === item.address ? ' active' : ''}`;
     el.classList.add('list-item');
@@ -844,8 +878,15 @@ function renderAddressList() {
         <div class="addr-title" title="${escapeHtml(fullAddress)}">${escapeHtml(localPart || fullAddress)}</div>
         <div class="addr-domain" title="${escapeHtml(domainLabel || fullAddress)}">${escapeHtml(domainLabel || '')}</div>
         <div class="address-meta">
-          <span class="address-chip">${escapeHtml(item.type)}</span>
+          <span class="address-chip type-${escapeHtml(item.type)}">${escapeHtml(item.type)}</span>
+          <span class="address-chip ${item.enabled ? 'ok' : 'muted'}">${item.enabled ? 'aktif' : 'nonaktif'}</span>
+          <span>${item.messageCount || 0} pesan</span>
         </div>
+        <div class="address-stats">
+          <span title="Pesan terakhir"><span class="material-icons">schedule</span>${escapeHtml(lastLabel)}</span>
+          <span title="Email dibuat"><span class="material-icons">add_circle</span>${escapeHtml(createdLabel)}</span>
+        </div>
+        <div class="address-destination" title="Tujuan: ${escapeHtml(destinationLabel)}">Tujuan: ${escapeHtml(destinationLabel)}</div>
       </div>
       <div class="address-actions">
         <button class="mini-btn" data-action="copy" title="Copy email">
@@ -877,13 +918,12 @@ function setSelectedAddress(address) {
 function updateAddressSortAvailability() {
   const select = document.getElementById('addressSort');
   if (!select) return;
-  const hasActivity = hasActivityData();
+  const hasActivity = state.addresses.some((item) => Number(item.lastActivity) > 0);
   Array.from(select.options).forEach((opt) => {
-    if (opt.dataset.requiresActivity) {
-      opt.disabled = !hasActivity;
-    }
+    if (opt.dataset.requiresActivity) opt.disabled = !hasActivity;
   });
-  if (!hasActivity && (select.value === 'newest' || select.value === 'oldest')) {
+  // Only reset message sort if no activity data
+  if (!hasActivity && (select.value === 'message-newest' || select.value === 'message-oldest')) {
     select.value = 'name-asc';
     localStorage.setItem(ADDRESS_SORT_KEY, 'name-asc');
   }
@@ -940,9 +980,11 @@ async function copyToClipboard(value, successMessage, errorMessage) {
 async function copyAddress(address) {
   return copyToClipboard(address, 'Email disalin', 'Gagal menyalin email');
 }
-function showAddRuleDialog() {
+
+async function showAddRuleDialog() {
   state.editingRuleId = null;
   state.editingRuleZoneId = null;
+  state.savingRule = false;
   document.getElementById('modalTitle').textContent = 'Add New Rule';
   document.getElementById('saveBtn').innerHTML = '<span class="material-icons">save</span> Save Rule';
   document.getElementById('ruleForm').reset();
@@ -956,6 +998,15 @@ function showAddRuleDialog() {
   updateRuleTypeUI();
   validateRuleForm();
   document.getElementById('ruleModal').classList.add('active');
+  if (!state.domains.length || state.domainsError) {
+    loadDomains(true).then(() => {
+      updateFromPreview();
+      validateRuleForm();
+      if (state.domainsError) {
+        showNotification('Gagal memuat domain: ' + state.domainsError, 'error');
+      }
+    });
+  }
 }
 
 function populateEditRule(rule) {
@@ -1000,10 +1051,7 @@ function closeRuleModal() {
 
 function updateFromPreview() {
   const localPart = document.getElementById('fromLocalPart').value.trim();
-  const domainSelect = document.getElementById('fromDomain');
-  const selectedDomain = domainSelect && !domainSelect.disabled && domainSelect.options.length
-    ? domainSelect.options[domainSelect.selectedIndex].textContent
-    : '';
+  const selectedDomain = getSelectedDomain()?.name || '';
   const preview = document.getElementById('fromPreview');
   if (!preview) return;
   const result = localPart && selectedDomain ? `${localPart}@${selectedDomain}` : 'nama@domain.com';
@@ -1022,56 +1070,50 @@ function updateRuleTypeUI() {
     toField.required = false;
     toField.disabled = true;
     toField.classList.remove('is-hidden');
-    if (workerSelect) {
-      workerSelect.classList.add('is-hidden');
-      workerSelect.disabled = true;
-    }
+    if (workerSelect) { workerSelect.classList.add('is-hidden'); workerSelect.disabled = true; }
     toLabel.textContent = 'Tujuan';
     toHelp.textContent = 'Tidak perlu tujuan untuk drop.';
     return;
   }
-
   if (type === 'worker') {
-    if (!state.workersLoaded) {
-      updateWorkerSelect();
-      loadWorkers();
-    }
-    const workerFallback = state.workersLoaded && (state.workersError || !state.workers.length);
     toLabel.textContent = 'Worker';
+    if (!state.workersLoaded && !state.workersLoading) loadWorkers();
+    if (state.workersLoading || !state.workersLoaded) {
+      toField.value = '';
+      toField.required = false;
+      toField.disabled = true;
+      toField.classList.add('is-hidden');
+      toHelp.textContent = 'Memuat daftar worker...';
+      if (workerSelect) {
+        workerSelect.classList.remove('is-hidden');
+        updateWorkerSelect();
+      }
+      return;
+    }
+    const workerFallback = !!state.workersError || !state.workers.length;
     if (workerFallback) {
       toField.disabled = false;
       toField.required = true;
       toField.classList.remove('is-hidden');
       toField.placeholder = 'nama-worker';
-      toHelp.textContent = state.workersError
-        ? 'Gagal memuat worker. Isi manual jika diperlukan.'
-        : 'Tidak ada worker. Isi manual jika diperlukan.';
-      if (workerSelect) {
-        workerSelect.classList.add('is-hidden');
-        workerSelect.disabled = true;
-      }
+      toHelp.textContent = state.workersError ? 'Gagal memuat worker. Isi manual jika diperlukan.' : 'Tidak ada worker. Isi manual jika diperlukan.';
+      if (workerSelect) { workerSelect.classList.add('is-hidden'); workerSelect.disabled = true; }
     } else {
       toField.value = '';
       toField.required = false;
       toField.disabled = true;
       toField.classList.add('is-hidden');
       toHelp.textContent = 'Pilih worker untuk menerima pesan.';
-      if (workerSelect) {
-        workerSelect.classList.remove('is-hidden');
-        updateWorkerSelect();
-      }
+      if (workerSelect) { workerSelect.classList.remove('is-hidden'); updateWorkerSelect(); }
     }
     return;
   }
-
   toField.disabled = false;
   toField.required = true;
   toField.placeholder = 'admin@company.com';
   toField.classList.remove('is-hidden');
-  if (workerSelect) {
-    workerSelect.classList.add('is-hidden');
-    workerSelect.disabled = true;
-  }
+  toField.value = type === 'forward' ? toField.value : '';
+  if (workerSelect) { workerSelect.classList.add('is-hidden'); workerSelect.disabled = true; }
   toLabel.textContent = 'Tujuan';
   toHelp.textContent = 'Tujuan email penerima.';
 }
@@ -1092,45 +1134,37 @@ function validateRuleForm() {
   const fromError = document.getElementById('fromError');
   const toError = document.getElementById('toError');
   const saveBtn = document.getElementById('saveBtn');
-  const domainSelect = document.getElementById('fromDomain');
-
   const localError = validateLocalPart(localPart);
-  const domainError = domainSelect && domainSelect.disabled ? 'Daftar domain tidak tersedia.' : '';
+  const domainError = getDomainValidationError();
   fromError.textContent = localError || domainError;
-
   let toErr = '';
+  if (!['forward', 'drop', 'worker'].includes(type)) toErr = 'Tipe rule tidak valid.';
   if (type === 'worker') {
     const usingSelect = workerSelect && !workerSelect.classList.contains('is-hidden');
-    if (usingSelect) {
-      if (!workerSelect.value || workerSelect.disabled) toErr = 'Worker wajib dipilih.';
-    } else if (!toValue) {
-      toErr = 'Worker wajib diisi.';
-    }
-  } else if (type !== 'drop' && !toValue) {
-    toErr = 'Tujuan wajib diisi.';
+    if (state.workersLoading || !state.workersLoaded) toErr = 'Worker sedang dimuat.';
+    else if (usingSelect) { if (!workerSelect.value || workerSelect.disabled) toErr = 'Worker wajib dipilih.'; }
+    else if (!toValue) toErr = 'Worker wajib diisi.';
+  } else if (type === 'forward') {
+    if (!toValue) toErr = 'Tujuan wajib diisi.';
+    else if (!/^\S+@\S+\.\S+$/.test(toValue)) toErr = 'Format email tujuan tidak valid.';
   }
   toError.textContent = toErr;
-
-  const valid = !localError && !domainError && !toErr;
+  const valid = !state.savingRule && !localError && !domainError && !toErr;
   saveBtn.disabled = !valid;
   return valid;
 }
 
 function buildFromEmail() {
   const localPart = document.getElementById('fromLocalPart').value.trim();
-  const domainSelect = document.getElementById('fromDomain');
-  const domainName = domainSelect && domainSelect.options.length ? domainSelect.options[domainSelect.selectedIndex].textContent : '';
-  if (!domainName) return localPart;
-  return `${localPart}@${domainName}`;
+  const domainName = getSelectedDomain()?.name || '';
+  return domainName ? `${localPart}@${domainName}` : localPart;
 }
 
 function getDestinationValue(type) {
   const toField = document.getElementById('toEmail');
   const workerSelect = document.getElementById('workerSelect');
   if (type === 'worker') {
-    if (workerSelect && !workerSelect.classList.contains('is-hidden') && workerSelect.value) {
-      return workerSelect.value.trim();
-    }
+    if (workerSelect && !workerSelect.classList.contains('is-hidden') && workerSelect.value) return workerSelect.value.trim();
     return (toField && toField.value ? toField.value.trim() : '');
   }
   return toField && toField.value ? toField.value.trim() : '';
@@ -1138,12 +1172,23 @@ function getDestinationValue(type) {
 
 async function saveRule(event) {
   event.preventDefault();
+  if (state.savingRule) return;
   if (!validateRuleForm()) return;
+  const selectedDomain = getSelectedDomain();
+  if (!selectedDomain) {
+    validateRuleForm();
+    showNotification('Pilih domain yang valid terlebih dahulu.', 'error');
+    return;
+  }
   const fromEmail = buildFromEmail();
   const ruleType = document.getElementById('ruleType').value;
   const toEmail = getDestinationValue(ruleType);
-  const zoneId = document.getElementById('fromDomain').value || state.editingRuleZoneId;
-
+  const zoneId = selectedDomain.id || state.editingRuleZoneId;
+  const saveBtn = document.getElementById('saveBtn');
+  const originalSaveHtml = saveBtn.innerHTML;
+  state.savingRule = true;
+  saveBtn.disabled = true;
+  saveBtn.innerHTML = '<span class="material-icons">hourglass_empty</span> Saving...';
   try {
     if (state.editingRuleId) {
       await api(`/api/rules/${encodeURIComponent(state.editingRuleId)}`, {
@@ -1162,6 +1207,10 @@ async function saveRule(event) {
     loadRules();
   } catch (e) {
     showNotification('Save failed: ' + e.message, 'error');
+  } finally {
+    state.savingRule = false;
+    saveBtn.innerHTML = originalSaveHtml;
+    validateRuleForm();
   }
 }
 
@@ -1210,20 +1259,17 @@ async function loadInbox(page = 0) {
 
 function escapeHtml(value) {
   return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+    .replace(/&/g, '&')
+    .replace(/</g, '<')
+    .replace(/>/g, '>')
+    .replace(/"/g, '"')
     .replace(/'/g, '&#39;');
 }
 
 function cleanLocalPart(localPart) {
   if (!localPart) return '';
   let cleaned = localPart.replace(/\+.*$/, '');
-  const stripped = cleaned.replace(
-    /^(bounce|bounces|noreply|no-reply|donotreply|do-not-reply|mailer-daemon|postmaster|notifications?)[._+-]*/i,
-    ''
-  );
+  const stripped = cleaned.replace(/^(bounce|bounces|noreply|no-reply|donotreply|do-not-reply|mailer-daemon|postmaster|notifications?)[._+-]*/i, '');
   cleaned = (stripped || cleaned).trim();
   return cleaned;
 }
@@ -1239,26 +1285,15 @@ function getSenderInfo(rawSender) {
   let email = '';
   let name = '';
   const match = sender.match(/^(.*)<([^>]+@[^>]+)>$/);
-  if (match) {
-    name = match[1].replace(/"/g, '').trim();
-    email = match[2].trim();
-  } else if (sender.includes('@')) {
-    email = sender;
-  } else {
-    name = sender;
-  }
-
+  if (match) { name = match[1].replace(/"/g, '').trim(); email = match[2].trim(); }
+  else if (sender.includes('@')) email = sender;
+  else name = sender;
   const domain = email.includes('@') ? email.split('@')[1].trim() : '';
   const localPart = email.includes('@') ? email.split('@')[0].trim() : '';
   const cleanedLocal = cleanLocalPart(localPart);
   const fallbackLabel = cleanedLocal || localPart || '';
   const label = formatLabel(name || fallbackLabel || email || sender || 'Unknown');
-
-  return {
-    label: label || 'Unknown',
-    email,
-    domain: domain || ''
-  };
+  return { label: label || 'Unknown', email, domain: domain || '' };
 }
 
 function renderInbox() {
@@ -1267,17 +1302,26 @@ function renderInbox() {
   const search = (document.getElementById('inboxSearch').value || '').trim().toLowerCase();
   const filtered = state.inbox.filter((email) => {
     if (!search) return true;
-    return `${email.subject || ''} ${email.sender || ''}`.toLowerCase().includes(search);
+    return `${email.subject || ''} ${email.sender || ''} ${email.recipient || ''}`.toLowerCase().includes(search);
   });
   const sortValue = document.getElementById('inboxSort')?.value || 'newest';
   const sorted = [...filtered].sort((a, b) => {
     const aTime = new Date(a.created_at || 0).getTime();
     const bTime = new Date(b.created_at || 0).getTime();
     if (sortValue === 'oldest') return aTime - bTime;
-    if (sortValue === 'az') {
+    if (sortValue === 'sender-az' || sortValue === 'sender-za' || sortValue === 'az') {
       const nameA = (getSenderInfo(a.sender).label || '').toLowerCase();
       const nameB = (getSenderInfo(b.sender).label || '').toLowerCase();
-      return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+      return (sortValue === 'sender-za')
+        ? nameB.localeCompare(nameA, undefined, { sensitivity: 'base' })
+        : nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+    }
+    if (sortValue === 'recipient-az' || sortValue === 'recipient-za') {
+      const recA = String(a.recipient || '').toLowerCase();
+      const recB = String(b.recipient || '').toLowerCase();
+      return sortValue === 'recipient-az'
+        ? recA.localeCompare(recB, undefined, { sensitivity: 'base' })
+        : recB.localeCompare(recA, undefined, { sensitivity: 'base' });
     }
     return bTime - aTime;
   });
@@ -1293,10 +1337,9 @@ function renderInbox() {
     const displayName = senderInfo.label || 'Unknown sender';
     const fromEmail = senderInfo.email || email.sender || 'Unknown';
     const domain = senderInfo.domain || (fromEmail.includes('@') ? fromEmail.split('@')[1] : 'unknown');
-    const toLabel = state.selectedAddress || '-';
+    const toLabel = email.recipient || state.selectedAddress || '-';
     const el = document.createElement('div');
-    el.className = 'inbox-item';
-    el.classList.add('list-item');
+    el.className = 'inbox-item list-item';
     el.style.animationDelay = `${Math.min(index, 10) * 30}ms`;
     el.dataset.id = email.id;
     const initial = displayName[0] || (fromEmail[0] || '?');
@@ -1385,10 +1428,7 @@ async function deleteEmail() {
 }
 
 async function handleLogout() {
-  try {
-    await fetch('/api/logout', { method: 'POST', credentials: 'include' });
-  } catch {}
-  clearLegacyAuthStorage();
+  try { await fetch('/api/logout', { method: 'POST', credentials: 'include' }); } catch {}
   localStorage.removeItem('selectedAddress');
   state.rules = [];
   state.ruleMap = new Map();
@@ -1398,25 +1438,19 @@ async function handleLogout() {
   state.inboxPage = 0;
   state.currentEmailId = null;
   state.currentEmailData = null;
-
+  sessionOk = false;
   const addressList = document.getElementById('address-list');
   if (addressList) addressList.innerHTML = '';
   const addressEmpty = document.getElementById('address-empty');
   if (addressEmpty) addressEmpty.style.display = 'block';
-
   const inboxList = document.getElementById('inbox-list');
   if (inboxList) inboxList.innerHTML = '';
   const inboxEmpty = document.getElementById('inbox-empty');
-  if (inboxEmpty) {
-    inboxEmpty.style.display = 'block';
-    inboxEmpty.textContent = 'Select an address to view messages.';
-  }
+  if (inboxEmpty) { inboxEmpty.style.display = 'block'; inboxEmpty.textContent = 'Select an address to view messages.'; }
   const subtitle = document.getElementById('inbox-subtitle');
   if (subtitle) subtitle.textContent = 'Select an address to load messages';
-
   closeEmailViewer();
-  setLoginDisabled(false);
-  setLoginVisible(true);
+  showLogin();
 }
 
 // Element SDK configuration (optional)
@@ -1433,7 +1467,6 @@ function mapToEditPanelValues(config) { return new Map([['panel_title', config.p
 
 document.addEventListener('DOMContentLoaded', async function () {
   loadTheme();
-  clearLegacyAuthStorage();
 
   const themeBtn = document.getElementById('btn-theme-toggle');
   if (themeBtn) themeBtn.addEventListener('click', toggleTheme);
@@ -1451,19 +1484,13 @@ document.addEventListener('DOMContentLoaded', async function () {
       const value = accentPicker.value;
       if (accentHexDisplay) accentHexDisplay.value = value;
       if (accentDebounce) clearTimeout(accentDebounce);
-      accentDebounce = setTimeout(() => {
-        if (!applyCustomAccent(value)) {
-          showNotification('Invalid hex color', 'error');
-        }
-      }, 250);
+      accentDebounce = setTimeout(() => { if (!applyCustomAccent(value)) showNotification('Invalid hex color', 'error'); }, 250);
     });
   }
   if (accentApply) {
     accentApply.addEventListener('click', () => {
       const value = accentPicker ? accentPicker.value : (accentHexDisplay ? accentHexDisplay.value : '');
-      if (!applyCustomAccent(value)) {
-        showNotification('Invalid hex color', 'error');
-      }
+      if (!applyCustomAccent(value)) showNotification('Invalid hex color', 'error');
     });
   }
 
@@ -1472,63 +1499,41 @@ document.addEventListener('DOMContentLoaded', async function () {
   const sidebarOverlay = document.getElementById('sidebarOverlay');
   if (sidebarOverlay) sidebarOverlay.addEventListener('click', () => setSidebarState('collapsed'));
   const savedState = localStorage.getItem(SIDEBAR_STATE_KEY);
-  if (savedState === 'open' || savedState === 'collapsed') {
-    setSidebarState(savedState);
-  } else {
-    const legacy = localStorage.getItem('sidebarCollapsed');
-    setSidebarState(legacy === '1' ? 'collapsed' : 'open');
-  }
+  if (savedState === 'open' || savedState === 'collapsed') setSidebarState(savedState);
+  else { const legacy = localStorage.getItem('sidebarCollapsed'); setSidebarState(legacy === '1' ? 'collapsed' : 'open'); }
 
   state.addressActivity = loadAddressActivity();
 
   const loginForm = document.getElementById('loginForm');
-  if (loginForm) loginForm.addEventListener('submit', handleAuth);
+  if (loginForm) loginForm.addEventListener('submit', handleLogin);
 
-  const registerBtn = document.getElementById('btn-register-request');
-  if (registerBtn) registerBtn.addEventListener('click', requestRegister);
+  const setupPasswordForm = document.getElementById('setupPasswordForm');
+  if (setupPasswordForm) setupPasswordForm.addEventListener('submit', handleSetupPassword);
 
-  const authStatus = await fetchAuthStatus();
-  if (authStatus) {
-    authOptions = {
-      token: !!authStatus.accessTokenEnabled,
-      tfa: !!authStatus.tfaEnabled,
-      password: !!authStatus.passwordEnabled,
-      authRequired: !!authStatus.authRequired,
-      tokenExpired: !!authStatus.tokenExpired,
-      tfaExpired: !!authStatus.tfaExpired,
-      registerPending: !!authStatus.registerPending,
-      registerExpiresAt: authStatus.registerExpiresAt || null
-    };
-  }
+  // Check if password is configured
+  let authStatus = null;
+  try {
+    const res = await fetch('/api/auth-status');
+    if (res.ok) authStatus = await res.json();
+  } catch {}
 
-  if (authOptions.registerPending) {
-    setAuthNotice('Register request pending approval in bot.', 'warning');
-    startRegisterPolling();
-  } else if (authOptions.tokenExpired || authOptions.tfaExpired) {
-    setAuthNotice('Login expired. Request a new token from the bot.', 'warning');
-  } else if (authOptions.authRequired && !(authOptions.token || authOptions.tfa || authOptions.password)) {
-    setAuthNotice('Auth required. Configure ACCESS_TOKEN / TFA / PASSWORD in .env.', 'warning');
+  const passwordConfigured = authStatus && authStatus.passwordEnabled;
+
+  if (passwordConfigured) {
+    // Try session
+    const ok = await checkSession();
+    if (ok) {
+      hideLogin();
+      await loadRules();
+    } else {
+      setAuthNotice('');
+      showLogin();
+    }
   } else {
-    setAuthNotice('');
+    // Password not configured - show setup
+    hideLogin();
+    showSetupPassword();
   }
-
-  updateRegisterButton();
-
-  if (authOptions.tokenExpired || authOptions.tfaExpired) {
-    clearLegacyAuthStorage();
-  }
-
-  const authConfigured = authOptions.token || authOptions.tfa || authOptions.password;
-
-  let defaultMode = authOptions.token ? 'token' : (authOptions.tfa ? 'tfa' : (authOptions.password ? 'password' : 'token'));
-  if (authOptions.tfa && (authOptions.tokenExpired || !authOptions.token)) defaultMode = 'tfa';
-  if (!isTokenUsable() && !isTfaUsable() && isPasswordUsable()) defaultMode = 'password';
-  setAuthMode(defaultMode);
-  setLoginDisabled(authOptions.registerPending);
-
-  document.querySelectorAll('.auth-toggle-btn').forEach((btn) => {
-    btn.addEventListener('click', () => setAuthMode(btn.dataset.auth));
-  });
 
   const settingsForm = document.getElementById('settingsForm');
   if (settingsForm) {
@@ -1545,27 +1550,22 @@ document.addEventListener('DOMContentLoaded', async function () {
   const checkBtn = document.getElementById('btn-check-status');
   if (checkBtn) checkBtn.addEventListener('click', () => checkApiStatus(checkBtn));
 
+  const diagBtn = document.getElementById('btn-diagnostics');
+  if (diagBtn) diagBtn.addEventListener('click', () => runDiagnostics(diagBtn));
+
   const addRuleBtn = document.getElementById('btn-add-rule');
-  if (addRuleBtn) addRuleBtn.addEventListener('click', showAddRuleDialog);
+  if (addRuleBtn) addRuleBtn.addEventListener('click', () => { showAddRuleDialog(); });
 
   document.getElementById('btn-modal-close')?.addEventListener('click', closeRuleModal);
   document.getElementById('btn-cancel')?.addEventListener('click', closeRuleModal);
   document.getElementById('ruleForm')?.addEventListener('submit', saveRule);
 
-  document.getElementById('fromLocalPart')?.addEventListener('input', () => {
-    updateFromPreview();
-    validateRuleForm();
-  });
-  document.getElementById('fromDomain')?.addEventListener('change', () => {
-    updateFromPreview();
-    validateRuleForm();
-  });
+  document.getElementById('fromLocalPart')?.addEventListener('input', () => { updateFromPreview(); validateRuleForm(); });
+  document.getElementById('btn-generate-email-name')?.addEventListener('click', generateEmailName);
+  document.getElementById('fromDomain')?.addEventListener('change', () => { updateFromPreview(); validateRuleForm(); });
   document.getElementById('toEmail')?.addEventListener('input', validateRuleForm);
   document.getElementById('workerSelect')?.addEventListener('change', validateRuleForm);
-  document.getElementById('ruleType')?.addEventListener('change', () => {
-    updateRuleTypeUI();
-    validateRuleForm();
-  });
+  document.getElementById('ruleType')?.addEventListener('change', () => { updateRuleTypeUI(); validateRuleForm(); });
 
   const addressSearch = document.getElementById('addressSearch');
   if (addressSearch) addressSearch.addEventListener('input', renderAddressList);
@@ -1573,10 +1573,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   if (addressSort) {
     const savedSort = localStorage.getItem(ADDRESS_SORT_KEY);
     if (savedSort) addressSort.value = savedSort;
-    addressSort.addEventListener('change', () => {
-      localStorage.setItem(ADDRESS_SORT_KEY, addressSort.value);
-      renderAddressList();
-    });
+    addressSort.addEventListener('change', () => { localStorage.setItem(ADDRESS_SORT_KEY, addressSort.value); renderAddressList(); });
   }
 
   document.getElementById('address-list')?.addEventListener('click', (e) => {
@@ -1587,16 +1584,9 @@ document.addEventListener('DOMContentLoaded', async function () {
       const ruleId = item.dataset.id;
       const zoneId = item.dataset.zone || null;
       const action = actionBtn.dataset.action;
-      if (action === 'copy') {
-        copyAddress(item.dataset.address);
-        return;
-      }
+      if (action === 'copy') { copyAddress(item.dataset.address); return; }
       if (action === 'toggle') return handleAddressToggle(ruleId, zoneId);
-      if (action === 'edit') {
-        const rule = state.ruleMap.get(getRuleMapKey(ruleId, zoneId));
-        if (rule) populateEditRule(rule);
-        return;
-      }
+      if (action === 'edit') { const rule = state.ruleMap.get(getRuleMapKey(ruleId, zoneId)); if (rule) populateEditRule(rule); return; }
       if (action === 'delete') return handleAddressDelete(ruleId, zoneId);
       return;
     }
@@ -1629,29 +1619,13 @@ document.addEventListener('DOMContentLoaded', async function () {
     window.elementSdk.init({ defaultConfig, onConfigChange, mapToCapabilities, mapToEditPanelValues });
   }
 
-  if (!authConfigured) {
-    if (authOptions.authRequired) {
-      setLoginVisible(true);
-    } else {
-      setLoginVisible(false);
-      await loadRules();
+  // Load stored address if available and session is active
+  if (sessionOk) {
+    const storedAddress = localStorage.getItem('selectedAddress');
+    if (storedAddress) {
+      state.selectedAddress = storedAddress;
+      renderAddressList();
+      loadInbox(0);
     }
-  } else if (authOptions.registerPending) {
-    setLoginVisible(true);
-  } else {
-    const sessionOk = await checkSession();
-    if (sessionOk) {
-      setLoginVisible(false);
-      await loadRules();
-    } else {
-      setLoginVisible(true);
-    }
-  }
-
-  const storedAddress = localStorage.getItem('selectedAddress');
-  if (storedAddress) {
-    state.selectedAddress = storedAddress;
-    renderAddressList();
-    loadInbox(0);
   }
 });

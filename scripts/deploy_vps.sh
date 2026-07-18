@@ -29,30 +29,15 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-if [[ ! -f .register-request.json ]]; then
-  echo '{"pending":null}' > .register-request.json
-fi
-
-if [[ ! -f worker/wrangler.toml ]] && [[ -f worker/wrangler.toml.example ]]; then
-  cp worker/wrangler.toml.example worker/wrangler.toml
-fi
-
-if [[ -f worker/wrangler.toml ]]; then
-  DB_ID="$(grep -E '^CF_D1_DATABASE_ID=' .env | sed -E 's/^CF_D1_DATABASE_ID=//')"
-  if [[ -n "${DB_ID}" ]]; then
-    sed -i "s/^database_id = \".*\"/database_id = \"${DB_ID}\"/" worker/wrangler.toml
-  fi
-fi
-
 docker compose up -d --build
 
 if [[ "${DEPLOY_WORKER}" == "true" ]]; then
-  CF_TOKEN="$(grep -E '^CF_API_TOKEN=' .env | sed -E 's/^CF_API_TOKEN=//')"
+  CF_TOKEN="$(grep -E '^CLOUDFLARE_API_TOKEN=' .env | sed -E 's/^CLOUDFLARE_API_TOKEN=//')"
   if [[ -z "${CF_TOKEN}" ]]; then
-    echo "ERROR: CF_API_TOKEN missing in .env. Cannot deploy worker."
+    echo "ERROR: CLOUDFLARE_API_TOKEN missing in .env. Cannot deploy worker."
     exit 1
   fi
-  echo "Deploying worker using CF_API_TOKEN..."
+  echo "Deploying worker using CLOUDFLARE_API_TOKEN..."
   docker run --rm \
     -v "$ROOT_DIR/worker":/app \
     -w /app \
@@ -61,4 +46,5 @@ if [[ "${DEPLOY_WORKER}" == "true" ]]; then
     sh -c "npm i -g wrangler >/dev/null 2>&1 && wrangler deploy"
 fi
 
-echo "Done. Panel should be running on http://<VPS-IP>:3000"
+DOMAIN="$(grep -E '^CADDY_DOMAIN=' .env | sed -E 's/^CADDY_DOMAIN=//' || true)"
+echo "Done. Panel should be running on https://${DOMAIN:-mail.ayaneo.my.id}"

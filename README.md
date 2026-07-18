@@ -1,104 +1,117 @@
 # Cloudflare Email Panel
 
-![license](https://img.shields.io/badge/license-ISC-blue.svg)
-![node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)
-![express](https://img.shields.io/badge/express-4.x-informational.svg)
-![status](https://img.shields.io/badge/state-stable-success.svg)
+Panel self-hosted untuk mengelola Cloudflare Email Routing, destination, rules, dan inbox yang disimpan di Cloudflare D1. Production memakai Docker, Caddy, dan HTTPS otomatis.
 
-Self hosted web panel to manage Cloudflare Email Routing rules, destinations, and inbox messages stored in D1. Built with Node.js and vanilla JS CSS.
+## Production URL
 
-## Features
+Default domain: **https://mail.ayaneo.my.id**.
 
-- Address list + inbox filtering per address
-- Rule management (create edit delete toggle)
-- Access key, 2FA, or password login (approved via Telegram bot)
-- Multi domain support with domain dropdown
-- Glass UI with theme presets and custom accent
-- Docker ready
+Port aplikasi `3000` tidak dibuka ke internet. Caddy membuka port `80` dan `443`, lalu meneruskan request HTTPS ke container panel internal.
 
-## Quick start (local)
+## Prasyarat VPS
 
-1) Copy env example
+- Ubuntu atau Debian VPS
+- DNS record **A** `mail.ayaneo.my.id` mengarah ke IPv4 VPS
+- Firewall/security group VPS mengizinkan TCP `80` dan `443`
+- Cloudflare **SSL/TLS encryption mode: Full (strict)**
+
+DNS boleh diproxy (orange cloud). Bila sertifikat tidak terbit, pastikan origin VPS dapat diakses pada port 80/443 dan tidak digunakan web server lain.
+
+## Instalasi AIO
+
+Clone repo ke VPS, masuk ke folder repo, lalu jalankan:
+
 ```bash
-cp .env.example .env
+sudo bash scripts/install_vps.sh
 ```
 
-2) Fill required values in `.env`
+Installer memasang Docker Engine + Compose bila belum tersedia, membuat `.env` tanpa menimpa file lama, meminta domain (default `mail.ayaneo.my.id`), membuka editor `.env`, lalu build dan menjalankan container.
+
+Isi minimal `.env`:
+
 ```env
 PORT=3000
-CF_API_TOKEN=your_api_token
-CF_ACCOUNT_ID=your_account_id
-CF_ZONE_ID=your_zone_id
-CF_D1_DATABASE_ID=your_d1_database_id
-TELEGRAM_BOT_TOKEN=your_bot_token
-TELEGRAM_MASTER_ID=your_telegram_id
+CADDY_DOMAIN=mail.ayaneo.my.id
+CLOUDFLARE_API_TOKEN=your_api_token
+CLOUDFLARE_ACCOUNT_ID=your_account_id
+CLOUDFLARE_ZONE_ID=your_zone_id
+CLOUDFLARE_D1_DATABASE_ID=your_d1_database_id
+PASSWORD_HASH=
+PASSWORD_SALT=
 ```
-Optional (local dev only):
-```env
-ALLOW_UNAUTHENTICATED=true
-```
-Note: auth is required by default. Without any auth configured, the API returns 401 unless `ALLOW_UNAUTHENTICATED=true`.
 
-Optional password login (adds third login option):
+Untuk password awal, kosongkan `PASSWORD_HASH` dan `PASSWORD_SALT`, buka panel, lalu buat password melalui layar setup. `.env` dibind ke container sehingga konfigurasi dari panel tersimpan di VPS.
+
+## Operasi harian
+
+Jalankan dari root project di VPS:
+
 ```bash
-node -e "const crypto=require('crypto');const pwd=process.argv[1];if(!pwd){console.error('Usage: node -e \"...\" your_password');process.exit(1);}const salt=crypto.randomBytes(16).toString('hex');const hash=crypto.scryptSync(pwd,salt,64).toString('hex');console.log('PASSWORD_SALT='+salt);console.log('PASSWORD_HASH='+hash);" your_password
-```
-Add both values to `.env`.
+# Status container
+docker compose ps
 
-3) Install and run
+# Log live panel dan Caddy
+docker compose logs -f
+
+# Update aplikasi
+git pull --rebase
+docker compose up -d --build --remove-orphans
+
+# Restart setelah edit .env manual
+docker compose restart panel
+
+# Stop stack (sertifikat Caddy tetap tersimpan di Docker volume)
+docker compose down
+```
+
+`/healthz` adalah endpoint liveness container. `/health` juga memeriksa akses Cloudflare API.
+
+## Worker dan D1 (opsional untuk Inbox)
+
+1. Buat database D1 dan isi `CLOUDFLARE_D1_DATABASE_ID` di root `.env`.
+2. Buat konfigurasi lokal Worker:
+
+   ```bash
+   cp worker/wrangler.toml.example worker/wrangler.toml
+   ```
+
+3. Isi `database_id` pada `worker/wrangler.toml` dengan ID D1.
+4. Deploy Worker dari mesin yang punya Wrangler login, atau dari VPS:
+
+   ```bash
+   bash scripts/deploy_vps.sh --deploy-worker
+   ```
+
+5. Pada Cloudflare Email Routing, buat rule **Send to Worker** menuju `inbox-worker`.
+
+Token API memerlukan izin yang sesuai untuk Email Routing, Zone read, Workers, dan D1 (bila inbox digunakan).
+
+## Local development
+
 ```bash
-npm install
-npm start
+cp .env.example .env
+npm ci
+npm run dev
 ```
 
-4) Open `http://localhost:3000`
+Buka `http://localhost:3000`. HTTPS dan cookie `Secure` aktif saat `NODE_ENV=production` di Docker/VPS.
 
-## Bot and login flow
+## Struktur utama
 
-- Run bot: `npm run start:bot` or `npm run start:all`
-- In panel, click "Request Register (10m)"
-- Approve in Telegram bot:
-  - `/register` default 5 minutes
-  - `/register 5m` or `/register 12h`
-- Bot sends access key and 2FA secret plus QR
-- Set panel password: `/password` (auto-generate, auto-delete) or `/password 16` or `/password your_password`
+- `server.js` — Express API dan static frontend
+- `public/` — frontend vanilla JavaScript
+- `worker/` — Cloudflare Email Worker dan D1 schema
+- `docker-compose.yml` — panel + Caddy production stack
+- `Caddyfile` — reverse proxy dan HTTPS otomatis
+- `scripts/install_vps.sh` — AIO installer Ubuntu/Debian
+- `scripts/deploy_vps.sh` — redeploy stack / optional Worker deploy
 
-## Docker (VPS)
+## Keamanan
 
-1) Create `.env` and `.register-request.json`
-```bash
-echo "{\"pending\":null}" > .register-request.json
-```
-
-2) Build and run
-```bash
-docker compose up -d
-```
-
-Alternative (script):
-```bash
-./scripts/deploy_vps.sh
-```
-
-3) Open `http://your-vps-ip:3000`
-
-Notes:
-- Use HTTPS on VPS so secure cookies work (NODE_ENV=production).
-- Keep panel behind VPN or Cloudflare Access.
-
-## Security notes
-
-- Do not commit `.env` or `.register-request.json`.
-- Protect the panel with network access control or reverse proxy auth.
-- Use HTTPS in production.
-
-## Project structure
-
-- `server.js` Express API server
-- `public/` frontend app
-- `bot.js` Telegram bot for access key and 2FA
-- `worker/` Cloudflare Worker for inbox storage
-- `worker/wrangler.toml.example` template (copy to `worker/wrangler.toml`)
+- Jangan commit `.env` atau `worker/wrangler.toml`.
+- Gunakan token Cloudflare dengan scope minimum dan rotasi token bila bocor.
+- Aktifkan password panel sebelum digunakan.
+- Untuk pembatasan ekstra, lindungi hostname dengan Cloudflare Access atau firewall/IP allowlist.
 
 ## License
 

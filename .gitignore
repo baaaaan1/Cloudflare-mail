@@ -8,6 +8,10 @@ node_modules/
 .register-request.json
 worker/wrangler.toml
 
+# Docker runtime data
+caddy_data/
+caddy_config/
+
 # Logs
 npm-debug.log*
 yarn-debug.log*

@@ -430,6 +430,19 @@ body.dark-mode .pill { background: rgba(15, 23, 42, 0.4); }
 .status-title { font-size: 13px; font-weight: 500; }
 .status-sub { font-size: 12px; color: var(--muted); }
 
+.diagnostics-result { margin-top: 4px; }
+.diagnostics-result.is-hidden { display: none; }
+.diag-summary { font-size: 12px; font-weight: 600; padding: 6px 10px; border-radius: 10px; margin-bottom: 8px; }
+.diag-summary.ok { background: rgba(34, 197, 94, 0.15); color: #15803d; }
+.diag-summary.fail { background: rgba(239, 68, 68, 0.15); color: #b91c1c; }
+.diag-list { list-style: none; display: grid; gap: 6px; }
+.diag-item { display: grid; gap: 2px; padding: 6px 8px; border-radius: 10px; background: var(--glass); border: 1px solid var(--border); }
+.diag-item.ok { border-left: 3px solid #22c55e; }
+.diag-item.fail { border-left: 3px solid #ef4444; }
+.diag-name { font-size: 12px; font-weight: 600; text-transform: capitalize; }
+.diag-detail { font-size: 11px; color: var(--muted); word-break: break-word; }
+.diag-hint { font-size: 11px; color: #b45309; }
+
 .about-card { display: grid; gap: 6px; }
 .about-title { font-weight: 500; }
 .about-sub { font-size: 12px; color: var(--muted); }
@@ -567,7 +580,7 @@ body.dark-mode .address-item,
 body.dark-mode .inbox-item {
   background: rgba(15, 23, 42, 0.5);
 }
-.address-item { grid-template-columns: 1fr auto; align-items: center; }
+.address-item { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .address-item.active {
   border-color: rgba(90, 169, 255, 0.6);
   background: linear-gradient(140deg, rgba(90, 169, 255, 0.18), rgba(90, 169, 255, 0.05));
@@ -593,11 +606,39 @@ body.dark-mode .inbox-item {
   font-size: 12px;
   color: var(--muted);
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   min-width: 0;
 }
 .address-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(90, 169, 255, 0.15); color: var(--accent-3); flex: 0 0 auto; }
+.address-chip.ok { background: rgba(34, 197, 94, 0.14); color: #16a34a; }
+.address-chip.muted { background: rgba(148, 163, 184, 0.14); color: var(--muted); }
+.address-chip.type-drop { background: rgba(239, 68, 68, 0.12); color: #dc2626; }
+.address-chip.type-worker { background: rgba(168, 85, 247, 0.14); color: #7c3aed; }
+.address-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  min-width: 0;
+}
+.address-stats span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.address-stats .material-icons { font-size: 13px; }
+.address-destination {
+  color: var(--muted);
+  font-size: 11px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .address-actions { display: flex; gap: 12px; align-items: center; }
 .mini-btn {
   border: none;
