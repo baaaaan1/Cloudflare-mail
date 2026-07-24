@@ -7,6 +7,10 @@
 
 Self-hosted panel to manage Cloudflare Email Routing, destinations, rules, and inbox (via D1). Production uses Docker, Caddy, and automatic HTTPS.
 
+## Screenshot
+
+![Cloudflare Email Panel](screenshots/cfmail.jpg)
+
 ## Features
 
 - **Email Routing Management** - Create, update, and delete forwarding rules
