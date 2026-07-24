@@ -23,7 +23,7 @@
 
   const getAccentColors = () => {
     const styles = getComputedStyle(document.documentElement);
-    const fallback = ['#5aa9ff', '#7fd1ff', '#3c6fff'];
+    const fallback = ['#6366f1', '#818cf8', '#4f46e5'];
     return [
       styles.getPropertyValue('--accent').trim() || fallback[0],
       styles.getPropertyValue('--accent-2').trim() || fallback[1],

@@ -40,8 +40,8 @@ app.use((req, _res, next) => {
 
 const PORT = process.env.PORT || 3000;
 
-if (!process.env.CLOUDFLARE_API_TOKEN || !process.env.CLOUDFLARE_ACCOUNT_ID || !process.env.CLOUDFLARE_ZONE_ID) {
-  console.warn('[WARN] Missing .env: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_ZONE_ID. Configure via Settings.');
+if (!process.env.CLOUDFLARE_API_TOKEN || !process.env.CLOUDFLARE_ACCOUNT_ID) {
+  console.warn('[WARN] Missing .env: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID. Configure via Settings.');
 }
 if (!process.env.CLOUDFLARE_D1_DATABASE_ID) {
   console.warn('[WARN] Missing .env: CLOUDFLARE_D1_DATABASE_ID. Inbox features will be disabled.');
@@ -301,20 +301,19 @@ async function deleteDestination(id) {
   return res.data.result;
 }
 
-async function listRules(zoneId = process.env.CLOUDFLARE_ZONE_ID) {
-  if (!zoneId) throw new Error('CLOUDFLARE_ZONE_ID not configured');
+async function listRules(zoneId) {
+  if (!zoneId) throw new Error('zoneId is required');
   return await paginateAll(`/zones/${zoneId}/email/routing/rules`);
 }
 
-async function getRule(ruleId, zoneId = process.env.CLOUDFLARE_ZONE_ID) {
-  if (!zoneId) throw new Error('CLOUDFLARE_ZONE_ID not configured');
+async function getRule(ruleId, zoneId) {
+  if (!zoneId) throw new Error('zoneId is required');
   const res = await cf.get(`/zones/${zoneId}/email/routing/rules/${ruleId}`);
   return res.data.result;
 }
 
-async function createRule(customEmail, destinationInput, type = 'forward', zoneIdOverride = null) {
-  const zoneId = zoneIdOverride || process.env.CLOUDFLARE_ZONE_ID;
-  if (!zoneId) throw new Error('CLOUDFLARE_ZONE_ID not configured');
+async function createRule(customEmail, destinationInput, type = 'forward', zoneId) {
+  if (!zoneId) throw new Error('zoneId is required');
   let actions;
   if (type === 'worker') {
     actions = [{ type: 'worker', value: [destinationInput] }];
@@ -335,9 +334,8 @@ async function createRule(customEmail, destinationInput, type = 'forward', zoneI
 }
 
 async function updateRule(ruleId, { customEmail, destinationId, enabled, type, zoneId }) {
-  const targetZoneId = zoneId || process.env.CLOUDFLARE_ZONE_ID;
-  if (!targetZoneId) throw new Error('CLOUDFLARE_ZONE_ID not configured');
-  const current = await getRule(ruleId, targetZoneId);
+  if (!zoneId) throw new Error('zoneId is required');
+  const current = await getRule(ruleId, zoneId);
   let actions = current.actions;
 
   const targetType = type || (actions[0] && actions[0].type) || 'forward';
@@ -361,13 +359,12 @@ async function updateRule(ruleId, { customEmail, destinationId, enabled, type, z
     matchers: customEmail ? [{ type: 'literal', field: 'to', value: customEmail }] : current.matchers,
     actions
   };
-  const res = await cf.put(`/zones/${targetZoneId}/email/routing/rules/${ruleId}`, body);
+  const res = await cf.put(`/zones/${zoneId}/email/routing/rules/${ruleId}`, body);
   return res.data.result;
 }
 
-async function deleteRule(ruleId, zoneIdOverride = null) {
-  const zoneId = zoneIdOverride || process.env.CLOUDFLARE_ZONE_ID;
-  if (!zoneId) throw new Error('CLOUDFLARE_ZONE_ID not configured');
+async function deleteRule(ruleId, zoneId) {
+  if (!zoneId) throw new Error('zoneId is required');
   const res = await cf.delete(`/zones/${zoneId}/email/routing/rules/${ruleId}`);
   return res.data.result;
 }
@@ -543,25 +540,21 @@ app.post('/api/inbox/init', async (_req, res) => {
 app.get('/api/config', (_req, res) => {
   res.json({
     account_id: process.env.CLOUDFLARE_ACCOUNT_ID || '',
-    zone_id: process.env.CLOUDFLARE_ZONE_ID || '',
     d1_database_id: process.env.CLOUDFLARE_D1_DATABASE_ID || '',
     has_token: !!process.env.CLOUDFLARE_API_TOKEN
   });
 });
 
 app.post('/api/config', (req, res) => {
-  const { account_id, zone_id, api_token, d1_database_id } = req.body;
+  const { account_id, api_token, d1_database_id } = req.body;
   const accountVal = sanitizeEnvValue('account_id', account_id);
   if (accountVal.error) return res.status(400).json({ error: accountVal.error });
-  const zoneVal = sanitizeEnvValue('zone_id', zone_id);
-  if (zoneVal.error) return res.status(400).json({ error: zoneVal.error });
   const d1Val = sanitizeEnvValue('d1_database_id', d1_database_id);
   if (d1Val.error) return res.status(400).json({ error: d1Val.error });
   const tokenVal = sanitizeEnvValue('api_token', api_token);
   if (tokenVal.error) return res.status(400).json({ error: tokenVal.error });
 
   if (accountVal.value !== undefined) process.env.CLOUDFLARE_ACCOUNT_ID = accountVal.value;
-  if (zoneVal.value !== undefined) process.env.CLOUDFLARE_ZONE_ID = zoneVal.value;
   if (d1Val.value !== undefined) process.env.CLOUDFLARE_D1_DATABASE_ID = d1Val.value;
   if (tokenVal.value) process.env.CLOUDFLARE_API_TOKEN = tokenVal.value;
 
@@ -575,7 +568,6 @@ app.post('/api/config', (req, res) => {
       else content += `\n${key}=${val}`;
     };
     if (accountVal.value !== undefined) updateKey('CLOUDFLARE_ACCOUNT_ID', accountVal.value);
-    if (zoneVal.value !== undefined) updateKey('CLOUDFLARE_ZONE_ID', zoneVal.value);
     if (d1Val.value !== undefined) updateKey('CLOUDFLARE_D1_DATABASE_ID', d1Val.value);
     if (tokenVal.value) updateKey('CLOUDFLARE_API_TOKEN', tokenVal.value);
     fs.writeFileSync(envPath, content.trim() + '\n');
@@ -591,6 +583,8 @@ app.post('/api/catch-all', async (req, res) => {
   try {
     const action = String(req.body.action || '').trim();
     const destinationId = String(req.body.destinationId || '').trim();
+    const zoneId = String(req.body.zoneId || '').trim();
+    if (!zoneId) return res.status(400).json({ error: 'zoneId required' });
     let body;
     if (action === 'disabled') body = { enabled: false };
     else if (action === 'drop') body = { enabled: true, action: { type: 'drop' } };
@@ -599,7 +593,7 @@ app.post('/api/catch-all', async (req, res) => {
       const value = await resolveDestinationArray(destinationId);
       body = { enabled: true, action: { type: 'forward', value } };
     } else return res.status(400).json({ error: 'unknown action' });
-    const resp = await cf.put(`/zones/${process.env.CLOUDFLARE_ZONE_ID}/email/routing/rules/catch_all`, body);
+    const resp = await cf.put(`/zones/${zoneId}/email/routing/rules/catch_all`, body);
     if (!resp.data || !resp.data.success) throw new Error(JSON.stringify(resp.data && (resp.data.errors || resp.data)));
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: eToMessage(e) }); }
@@ -613,21 +607,15 @@ app.get('/healthz', (_req, res) => {
 app.get('/health', async (_req, res) => {
   const warnings = [];
   let destinations = 0;
-  let rules = 0;
   try {
     const d = await listDestinations();
     destinations = d.length;
   } catch (e) {
     warnings.push('destinations: ' + eToMessage(e));
   }
-  try {
-    const r = await listRules();
-    rules = r.length;
-  } catch (e) {
-    warnings.push('rules: ' + eToMessage(e));
-  }
+  // Rules check without zoneId is not available in all-zones mode; domain list serves as connectivity check
   const ok = warnings.length === 0;
-  res.status(ok ? 200 : 200).json({ ok, destinations, rules, warnings });
+  res.status(200).json({ ok, destinations, warnings });
 });
 
 // Diagnostics — probe each Cloudflare capability and report missing permissions
@@ -656,7 +644,13 @@ app.get('/api/diagnostics', async (_req, res) => {
     return r.data.success ? 1 : 0;
   });
   await probe('destinations', async () => (await listDestinations()).length);
-  await probe('rules', async () => (await listRules()).length);
+  await probe('rules', async () => {
+    const domains = await listDomains();
+    if (!domains.length) return 0;
+    // Probe rules on first domain as a sample (all-zones mode)
+    const domainRules = await listRules(domains[0].id);
+    return domainRules.length;
+  });
   await probe('domains', async () => (await listDomains()).length);
   await probe('d1', async () => {
     const rows = await queryD1('SELECT name FROM sqlite_master WHERE type=\'table\'');

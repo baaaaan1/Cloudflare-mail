@@ -34,9 +34,9 @@ let sessionOk = false;
 
 const accentPresets = {
   ocean: { accent: '#5aa9ff', accent2: '#7fd1ff', accent3: '#3c6fff' },
-  purple: { accent: '#9b7bff', accent2: '#c0a0ff', accent3: '#6b4cff' },
-  emerald: { accent: '#30c28a', accent2: '#6adbb1', accent3: '#1a8f69' },
-  amber: { accent: '#f4a340', accent2: '#ffd089', accent3: '#d97706' }
+  purple: { accent: '#6366f1', accent2: '#818cf8', accent3: '#4f46e5' },
+  emerald: { accent: '#10b981', accent2: '#34d399', accent3: '#059669' },
+  amber: { accent: '#f59e0b', accent2: '#fbbf24', accent3: '#d97706' }
 };
 
 const ADDRESS_SORT_KEY = 'addressSort';
@@ -304,6 +304,11 @@ function updateSidebarHandle(state) {
   if (handle) handle.setAttribute('aria-expanded', String(isOpen));
 }
 
+function showView() {
+  const el = document.querySelector('.mail-layout');
+  if (el) el.style.display = '';
+}
+
 function setSidebarState(state) {
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebarOverlay');
@@ -372,6 +377,8 @@ async function handleLogin(event) {
     hideLogin();
     sessionOk = true;
     await loadRules();
+    showView();
+    restoreSelectedAddress();
   } catch (e) {
     showNotification('Login failed: ' + e.message, 'error');
   }
@@ -517,7 +524,6 @@ async function loadSettings() {
   try {
     const config = await api('/api/config');
     document.getElementById('cfgAccountId').value = config.account_id || '';
-    document.getElementById('cfgZoneId').value = config.zone_id || '';
     document.getElementById('cfgD1DatabaseId').value = config.d1_database_id || '';
     const tokenInput = document.getElementById('cfgApiToken');
     tokenInput.value = '';
@@ -532,7 +538,6 @@ async function saveSettings(e) {
   e.preventDefault();
   const body = {
     account_id: document.getElementById('cfgAccountId').value.trim(),
-    zone_id: document.getElementById('cfgZoneId').value.trim(),
     d1_database_id: document.getElementById('cfgD1DatabaseId').value.trim(),
     api_token: document.getElementById('cfgApiToken').value.trim()
   };
@@ -563,6 +568,7 @@ async function loadDomains(force = false) {
   state.domainsLoading = false;
   state.domainsLoaded = true;
   updateDomainSelect();
+  updateDomainFilter();
   return state.domains;
 }
 
@@ -648,6 +654,29 @@ function updateWorkerSelect(selectedName = null) {
   }
 }
 
+function updateDomainFilter() {
+  const select = document.getElementById('domainFilter');
+  if (!select) return;
+  const currentValue = select.value;
+  select.innerHTML = '<option value="">All Domains</option>';
+  state.domains.forEach((domain) => {
+    if (!domain || !domain.id || !domain.name) return;
+    const opt = document.createElement('option');
+    opt.value = domain.id;
+    opt.textContent = domain.name;
+    select.appendChild(opt);
+  });
+  if (currentValue && Array.from(select.options).some((o) => o.value === currentValue)) {
+    select.value = currentValue;
+  }
+}
+
+function getSelectedDomainFilter() {
+  const select = document.getElementById('domainFilter');
+  if (!select || !select.value) return null;
+  return select.value;
+}
+
 function updateDomainSelect(selectedId = null) {
   const select = document.getElementById('fromDomain');
   if (!select) return;
@@ -722,7 +751,7 @@ function getRuleMapKey(ruleId, zoneId) {
 
 async function loadRules() {
   try {
-    await loadDomains();
+    await loadDomains(true);
     let rules = [];
     if (state.domains.length) {
       const requests = state.domains.map((domain) =>
@@ -743,14 +772,6 @@ async function loadRules() {
         }
       });
       setAuthNotice('');
-    } else {
-      try {
-        const data = await api('/api/rules');
-        rules = data.map((rule) => ({ ...rule, zoneId: null, zoneName: '' }));
-        setAuthNotice('');
-      } catch (err) {
-        setAuthNotice('');
-      }
     }
     state.rules = rules;
     state.ruleMap = new Map();
@@ -825,7 +846,9 @@ function renderAddressList() {
   const empty = document.getElementById('address-empty');
   const search = (document.getElementById('addressSearch').value || '').trim().toLowerCase();
   const sortValue = document.getElementById('addressSort')?.value || 'name-asc';
+  const domainFilter = getSelectedDomainFilter();
   let items = state.addresses.filter((item) => {
+    if (domainFilter && item.zoneId !== domainFilter) return false;
     if (!search) return true;
     return [item.address, item.zoneName, item.type, item.destination]
       .filter(Boolean)
@@ -844,15 +867,6 @@ function renderAddressList() {
       if (!aTime) return 1;
       if (!bTime) return -1;
       return sortValue === 'message-newest' ? bTime - aTime : aTime - bTime;
-    }
-    if (sortValue === 'created-newest' || sortValue === 'created-oldest') {
-      // Use createdAt if available, otherwise fallback to lastActivity
-      const aTime = a.createdAt || a.lastActivity || 0;
-      const bTime = b.createdAt || b.lastActivity || 0;
-      if (!aTime && !bTime) return nameA.localeCompare(nameB);
-      if (!aTime) return 1;
-      if (!bTime) return -1;
-      return sortValue === 'created-newest' ? bTime - aTime : aTime - bTime;
     }
     return nameA.localeCompare(nameB);
   });
@@ -913,6 +927,16 @@ function setSelectedAddress(address) {
   localStorage.setItem('selectedAddress', address || '');
   renderAddressList();
   loadInbox(0);
+}
+
+function restoreSelectedAddress() {
+  if (!sessionOk) return;
+  const storedAddress = localStorage.getItem('selectedAddress');
+  if (storedAddress) {
+    state.selectedAddress = storedAddress;
+    renderAddressList();
+    loadInbox(0);
+  }
 }
 
 function updateAddressSortAvailability() {
@@ -1389,28 +1413,78 @@ function closeEmailViewer() {
   document.getElementById('viewerOverlay').classList.remove('active');
 }
 
+function wrapEmailHtml(html) {
+  const content = String(html || '').trim();
+  if (!content) return '';
+  const baseStyle = 'img{max-width:100%!important;height:auto!important}table{max-width:100%}body{margin:0;padding:12px;background:#ffffff;color:#1a1a2e;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.5;word-break:break-word}a{color:#2563eb}';
+  // Full HTML document — inject styles without nesting another document
+  if (/^<!DOCTYPE/i.test(content) || /<html[\s>]/i.test(content)) {
+    if (/<\/head>/i.test(content)) {
+      return content.replace(/<\/head>/i, `<style>${baseStyle}</style></head>`);
+    }
+    if (/<body[\s>]/i.test(content)) {
+      return content.replace(/<body([^>]*)>/i, `<body$1><style>${baseStyle}</style>`);
+    }
+    return content;
+  }
+  // HTML fragment — wrap in minimal document with light email-safe defaults
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${baseStyle}</style></head><body>${content}</body></html>`;
+}
+
 function renderEmailBody(type) {
-  const container = document.getElementById('emailBodyContainer');
-  const btnHtml = document.getElementById('btn-view-html');
-  const btnText = document.getElementById('btn-view-text');
-  if (type === 'html') {
-    btnHtml.classList.add('active');
-    btnText.classList.remove('active');
-    const iframe = document.createElement('iframe');
-    iframe.className = 'email-body-iframe';
-    iframe.setAttribute('sandbox', '');
-    iframe.setAttribute('referrerpolicy', 'no-referrer');
-    iframe.srcdoc = state.currentEmailData?.html_body || '<div style="font-family: sans-serif; padding: 20px;">No HTML content</div>';
-    container.innerHTML = '';
-    container.appendChild(iframe);
-  } else {
-    btnHtml.classList.remove('active');
-    btnText.classList.add('active');
-    const div = document.createElement('div');
-    div.className = 'email-body-text';
-    div.textContent = state.currentEmailData?.text_body || '(No text content)';
-    container.innerHTML = '';
-    container.appendChild(div);
+  try {
+    const container = document.getElementById('emailBodyContainer');
+    const btnHtml = document.getElementById('btn-view-html');
+    const btnText = document.getElementById('btn-view-text');
+    const data = state.currentEmailData;
+    
+    if (type === 'html') {
+      btnHtml.classList.add('active');
+      btnText.classList.remove('active');
+      const htmlContent = data?.html_body;
+      if (htmlContent && String(htmlContent).trim()) {
+        const iframe = document.createElement('iframe');
+        iframe.className = 'email-body-iframe';
+        // allow-same-origin allows loading images/resources from same origin
+        // allow-popups allows links to open in new tabs
+        // allow-popups-to-escape-sandbox allows popups to escape sandbox
+        iframe.setAttribute('sandbox', 'allow-same-origin allow-popups allow-popups-to-escape-sandbox');
+        iframe.setAttribute('referrerpolicy', 'no-referrer');
+        iframe.setAttribute('title', 'Email content');
+        iframe.srcdoc = wrapEmailHtml(htmlContent);
+        container.innerHTML = '';
+        container.appendChild(iframe);
+      } else {
+        // No HTML content - try text_body as fallback
+        const textFallback = data?.text_body ? String(data.text_body).trim() : '';
+        container.innerHTML = '';
+        const div = document.createElement('div');
+        div.className = 'email-body-text';
+        div.textContent = textFallback || '(No HTML or text content)';
+        container.appendChild(div);
+      }
+    } else {
+      btnHtml.classList.remove('active');
+      btnText.classList.add('active');
+      const textContent = data?.text_body ? String(data.text_body).trim() : '(No text content)';
+      container.innerHTML = '';
+      const div = document.createElement('div');
+      div.className = 'email-body-text';
+      div.textContent = textContent || '(No text content)';
+      container.appendChild(div);
+    }
+  } catch (e) {
+    // Fallback error display
+    const container = document.getElementById('emailBodyContainer');
+    if (container) {
+      container.innerHTML = '';
+      const div = document.createElement('div');
+      div.className = 'email-body-text';
+      div.style.color = '#ef4444';
+      div.textContent = 'Error rendering email: ' + e.message;
+      container.appendChild(div);
+    }
+    console.error('renderEmailBody error:', e);
   }
 }
 
@@ -1500,7 +1574,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   if (sidebarOverlay) sidebarOverlay.addEventListener('click', () => setSidebarState('collapsed'));
   const savedState = localStorage.getItem(SIDEBAR_STATE_KEY);
   if (savedState === 'open' || savedState === 'collapsed') setSidebarState(savedState);
-  else { const legacy = localStorage.getItem('sidebarCollapsed'); setSidebarState(legacy === '1' ? 'collapsed' : 'open'); }
+  else { const legacy = localStorage.getItem('sidebarCollapsed'); setSidebarState(legacy === '1' ? 'collapsed' : 'collapsed'); }
 
   state.addressActivity = loadAddressActivity();
 
@@ -1525,6 +1599,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     if (ok) {
       hideLogin();
       await loadRules();
+      showView();
     } else {
       setAuthNotice('');
       showLogin();
@@ -1566,6 +1641,9 @@ document.addEventListener('DOMContentLoaded', async function () {
   document.getElementById('toEmail')?.addEventListener('input', validateRuleForm);
   document.getElementById('workerSelect')?.addEventListener('change', validateRuleForm);
   document.getElementById('ruleType')?.addEventListener('change', () => { updateRuleTypeUI(); validateRuleForm(); });
+
+  const domainFilter = document.getElementById('domainFilter');
+  if (domainFilter) domainFilter.addEventListener('change', renderAddressList);
 
   const addressSearch = document.getElementById('addressSearch');
   if (addressSearch) addressSearch.addEventListener('input', renderAddressList);
@@ -1620,12 +1698,5 @@ document.addEventListener('DOMContentLoaded', async function () {
   }
 
   // Load stored address if available and session is active
-  if (sessionOk) {
-    const storedAddress = localStorage.getItem('selectedAddress');
-    if (storedAddress) {
-      state.selectedAddress = storedAddress;
-      renderAddressList();
-      loadInbox(0);
-    }
-  }
+  restoreSelectedAddress();
 });
