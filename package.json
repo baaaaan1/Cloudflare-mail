@@ -1,7 +1,28 @@
 {
   "name": "cf-email-panel",
   "version": "1.0.0",
-  "description": "Cloudflare Email Routing Panel",
+  "description": "Self-hosted panel to manage Cloudflare Email Routing, destinations, rules, and inbox",
+  "main": "server.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/baaaaan1/Cloudflare-mail.git"
+  },
+  "homepage": "https://github.com/baaaaan1/Cloudflare-mail#readme",
+  "bugs": {
+    "url": "https://github.com/baaaaan1/Cloudflare-mail/issues"
+  },
+  "keywords": [
+    "cloudflare",
+    "email",
+    "routing",
+    "forwarding",
+    "inbox",
+    "d1",
+    "worker",
+    "self-hosted",
+    "panel"
+  ],
+  "author": "baaaaan1",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
