@@ -339,4 +339,8 @@ This project is licensed under the ISC License - see the [LICENSE](LICENSE) file
 
 ---
 
+<<<<<<< Updated upstream
 Made with ☕ by [baaaaan1](https://github.com/baaaaan1)
+=======
+Made with ☕ by [baaaaan1](https://github.com/baaaaan1)
+>>>>>>> Stashed changes
