@@ -83,6 +83,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] - 2026-08-25
+
+### 🔒 Security
+- Session IDs are stored hashed (SHA-256) in memory; raw IDs are never kept
+- Sliding session expiry: 24h TTL plus 30 min idle timeout, with periodic cleanup
+- Session-bound CSRF token required on all mutating requests (cookie sessions)
+- Per-IP brute-force lockout: 5 failed logins → 15 min temporary block
+- Optional `ADMIN_API_TOKEN` for `Authorization: Bearer <token>` / `X-API-Key` API auth
+- `scripts/generate-password.js` to generate `PASSWORD_HASH` / `PASSWORD_SALT` for `.env`
+- Added `Strict-Transport-Security`, `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy` headers
+- `/api/config` now exposes and can set an admin API token
+
+### 🐳 Docker
+- Panel container runs as unprivileged user (UID 1000) with `no-new-privileges:true` and `init: true`
+- `.env` bind mount ownership handled by `install_vps.sh` so settings save from the UI
+- Added `docker-compose.dokploy.yml` for Dokploy (self-hosted) deployments (no Caddy, no host ports, env via Dokploy Environment)
+
+### 🧩 Changed
+- `/api/session` returns real auth state (fixes stale session on reload)
+- `/api/config` reports `has_admin_api_token`
+
 ## [Unreleased]
 
 ### Planned Features
@@ -100,4 +121,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.1.0 | 2026-08-25 | Login/session hardening, CSRF, brute-force lockout, API token auth, Dokploy deploy |
 | 1.0.0 | 2025-07-24 | Initial release |

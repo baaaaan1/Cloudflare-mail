@@ -1,6 +1,6 @@
 {
   "name": "cf-email-panel",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Self-hosted panel to manage Cloudflare Email Routing, destinations, rules, and inbox",
   "main": "server.js",
   "repository": {

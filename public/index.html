@@ -121,6 +121,18 @@
        </div>
        <span class="field-help">Email Routing read/write required</span>
       </label>
+      <label class="field">
+       <span class="field-label">Admin API Token</span>
+       <div class="input-group">
+        <input type="password" id="cfgAdminApiToken" class="form-input" placeholder="Update Admin API Token" autocomplete="off">
+        <div class="input-actions">
+         <button type="button" class="icon-btn-sm is-hidden" id="cfgAdminApiTokenToggle" data-action="toggle-visibility" data-target="cfgAdminApiToken" title="Show/Hide">
+          <span class="material-icons">visibility</span>
+         </button>
+        </div>
+       </div>
+       <span class="field-help">Gunakan sebagai token Bearer/X-API-Key untuk akses API dari luar</span>
+      </label>
       <button type="submit" class="btn">Save Settings</button>
      </form>
     </section>

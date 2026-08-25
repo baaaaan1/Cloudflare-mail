@@ -4,6 +4,7 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 1.1.x   | :white_check_mark: |
 | 1.0.x   | :white_check_mark: |
 | < 1.0   | :x:                |
 
@@ -37,10 +38,14 @@ We take security seriously. If you discover a security vulnerability in Cloudfla
 
 ### Authentication
 
-- Password-only authentication with salted hash (scrypt)
-- Secure session management with HttpOnly cookies
+- Password-only authentication with salted hash (scrypt, timing-safe compare)
+- Session IDs stored hashed (SHA-256) in memory; never kept in raw form
+- Secure session management with HttpOnly, SameSite=Strict cookies
 - Rate limiting on login attempts (10 attempts per 5 minutes)
-- Session timeout (24 hours)
+- Per-IP brute-force lockout (5 failed attempts → 15 minute block)
+- Session timeout (24 hours) plus idle timeout (30 minutes of inactivity)
+- CSRF token required on mutating cookie-authenticated requests
+- Optional `ADMIN_API_TOKEN` for `Authorization: Bearer`/`X-API-Key` API auth
 
 ### HTTP Security Headers
 
@@ -57,7 +62,9 @@ Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
 
 ### API Security
 
-- All API routes require authentication (except login, logout, auth-status)
+- All API routes require authentication (except login, logout, auth-status, session)
+- Cookie sessions require a matching CSRF token on mutating requests
+- Optional `ADMIN_API_TOKEN` bearer auth for scripted/remote access
 - Rate limiting on sensitive endpoints
 - Input validation and sanitization
 - No sensitive data in error messages
@@ -71,7 +78,8 @@ Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
 
 ### Docker Security
 
-- Non-root process inside container
+- Runs as a non-root user (UID 1000) in the container
+- `no-new-privileges:true` and `init: true` via Docker Compose
 - Minimal Alpine Linux base image
 - No unnecessary packages installed
 - Read-only Caddyfile mount
@@ -103,6 +111,7 @@ CLOUDFLARE_API_TOKEN=your_api_token
 CLOUDFLARE_ACCOUNT_ID=your_account_id
 PASSWORD_HASH=your_password_hash
 PASSWORD_SALT=your_password_salt
+ADMIN_API_TOKEN=your_admin_api_token
 ```
 
 ### 4. Regular Updates

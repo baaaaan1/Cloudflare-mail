@@ -1,0 +1,42 @@
+# Dokploy (self-hosted) deployment — Docker Compose built from GitHub.
+#
+# Differences from docker-compose.yml (Caddy/VPS):
+#   - No Caddy service: Dokploy's own Traefik reverse proxy handles TLS + domain
+#     routing. Configure the domain in Dokploy UI → "Domains" tab.
+#   - No host ports: the panel is only exposed on the internal 3000 (Dokploy routes
+#     to it). Use "expose" so the port is not published to the host.
+#   - No `./.env:/app/.env` bind mount: set every variable in Dokploy UI →
+#     "Environment" tab. Dokploy writes them to `.env` next to this compose file,
+#     and `env_file: .env` injects them into the container. Do NOT use the in-panel
+#     setup-password/Save Settings to write .env (the container runs as non-root UID
+#     1000 and Dokploy regenerates .env on each deploy).
+#
+# Steps in Dokploy:
+#   1. Create a "Docker Compose" service, source = GitHub (this repo).
+#   2. In "General" set the compose file path to: docker-compose.dokploy.yml
+#   3. In "Environment" add: PASSWORD_SALT, PASSWORD_HASH, CLOUDFLARE_API_TOKEN,
+#      CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_D1_DATABASE_ID, ADMIN_API_TOKEN, PORT.
+#      Generate the password first:
+#        node scripts/generate-password.js --password "your-secret"
+#   4. In "Domains" add your domain → Dokploy routes + issues TLS automatically.
+
+services:
+  panel:
+    build: .
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

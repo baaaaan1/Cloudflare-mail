@@ -5,9 +5,14 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-COPY . .
+# Copy source owned by the non-root runtime user and make the app dir writable
+COPY --chown=node:node . .
+RUN chown -R node:node /app
 
 ENV NODE_ENV=production
+ENV PORT=3000
+
+USER node
 EXPOSE 3000
 
 CMD ["node", "server.js"]

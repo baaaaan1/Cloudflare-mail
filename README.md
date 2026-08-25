@@ -98,10 +98,32 @@ PASSWORD_SALT=
 3. Enter your desired password (minimum 8 characters)
 4. The password hash will be saved to `.env`
 
+Alternatively, generate the hash outside the panel:
+
+```bash
+node scripts/generate-password.js --password "your-secret"
+# or interactive:
+node scripts/generate-password.js
+```
+
+Copy the printed `PASSWORD_SALT=` and `PASSWORD_HASH=` into `.env`.
+
 ### 5. Access your panel
 
 ```
 https://your-domain.com
+```
+
+### Non-root container & `.env` permissions
+
+The panel container runs as a **non-root** user (UID 1000). When you bind-mount
+`.env` from the host, it must be writable by that UID so the Settings/setup-password
+UI can save changes. The `install_vps.sh` script handles this automatically; for a
+manual setup run:
+
+```bash
+chown 1000:1000 .env
+chmod 600 .env
 ```
 
 ## Manual Installation (without Docker)
@@ -136,6 +158,40 @@ npm start
 
 The panel will be available at `http://localhost:3000`.
 
+## Deploy with Dokploy (self-hosted)
+
+Dokploy builds directly from GitHub using Docker Compose. A dedicated compose file
+is included at [`docker-compose.dokploy.yml`](docker-compose.dokploy.yml) — it runs
+only the panel and lets Dokploy's built-in Traefik proxy handle TLS + domains.
+
+1. In Dokploy, create a **Docker Compose** service with source **GitHub** → this repo.
+2. In **General**, set the compose file path to `docker-compose.dokploy.yml`.
+3. In **Environment**, add the required variables (set them in the UI, not in the panel):
+
+   ```env
+   PORT=3000
+   CLOUDFLARE_API_TOKEN=your_api_token
+   CLOUDFLARE_ACCOUNT_ID=your_account_id
+   CLOUDFLARE_D1_DATABASE_ID=your_d1_database_id
+   PASSWORD_SALT=generated_salt
+   PASSWORD_HASH=generated_hash
+   ADMIN_API_TOKEN=optional_script_token
+   ```
+
+   Generate the password first, then copy both values:
+
+   ```bash
+   node scripts/generate-password.js --password "your-secret"
+   ```
+
+4. In **Domains**, add your domain. Dokploy routes traffic to the panel (internal
+   port 3000) and issues the TLS certificate automatically.
+
+> **Note:** Because the container runs as non-root (UID 1000) and Dokploy regenerates
+> `.env` on every deploy, do **not** rely on the panel's own "Set password"/"Save
+> Settings" screens to write `.env`. Set all values in the Dokploy **Environment**
+> tab instead.
+
 ## Configuration Reference
 
 | Variable | Required | Description |
@@ -145,8 +201,9 @@ The panel will be available at `http://localhost:3000`.
 | `CLOUDFLARE_API_TOKEN` | Yes | Cloudflare API token with required permissions |
 | `CLOUDFLARE_ACCOUNT_ID` | Yes | Your Cloudflare account ID |
 | `CLOUDFLARE_D1_DATABASE_ID` | No | D1 database ID (required for inbox feature) |
-| `PASSWORD_HASH` | No | Password hash (set via panel setup) |
-| `PASSWORD_SALT` | No | Password salt (set via panel setup) |
+| `PASSWORD_HASH` | No (unless password set) | Password hash (scrypt, hex) generated via panel setup or `scripts/generate-password.js` |
+| `PASSWORD_SALT` | No (unless password set) | Password salt (hex) generated via panel setup or `scripts/generate-password.js` |
+| `ADMIN_API_TOKEN` | No | Optional token for scripted/remote API access (`Authorization: Bearer <token>` or `X-API-Key`) |
 
 ### Cloudflare API Token Permissions
 
@@ -167,6 +224,12 @@ Create a custom API token with these permissions:
 | `/api/login` | POST | Login with password |
 | `/api/logout` | POST | Logout |
 | `/api/setup-password` | POST | Initial password setup |
+
+**API token auth (optional):** set `ADMIN_API_TOKEN` in `.env`, then call any `/api/*`
+endpoint (except login/logout/auth-status) with `Authorization: Bearer <token>` or
+`X-API-Key: <token>` to authenticate without a cookie session. Mutating requests
+authenticated via cookies require a matching `X-CSRF-Token` header, which is
+returned by `/api/login` and `/api/session`.
 
 ### Destinations
 
@@ -277,7 +340,8 @@ The server will start with hot-reload at `http://localhost:3000`.
 ├── scripts/
 │   ├── install_vps.sh     # AIO installer
 │   └── deploy_vps.sh      # Deploy script
-├── docker-compose.yml     # Production stack
+├── docker-compose.yml     # Production stack (VPS + Caddy)
+├── docker-compose.dokploy.yml  # Dokploy (self-hosted) deployment
 ├── Dockerfile             # Node.js container
 ├── Caddyfile              # Reverse proxy config
 └── .env.example           # Environment template
@@ -293,11 +357,17 @@ npm run deploy:worker  # Deploy Cloudflare Worker
 
 ## Security
 
-- **Password Authentication** - Secure your panel with a password
+- **Password Authentication** - Secure your panel with a password (scrypt, salted, timing-safe compare)
+- **API Token Auth** - Optional `ADMIN_API_TOKEN` for scripted/remote access
 - **Rate Limiting** - Protection against brute-force attacks
+- **Login Lockout** - Temporary per-IP lockout after repeated failed logins
+- **CSRF Protection** - Session-bound CSRF token required on mutating requests
+- **Session Hardening** - HttpOnly, SameSite=Strict cookies, hashed session IDs, idle timeout
 - **CSP Headers** - Content Security Policy to prevent XSS
 - **HSTS** - HTTP Strict Transport Security
 - **Secure Cookies** - HttpOnly, SameSite=Strict
+- **Security Headers** - CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, Cross-Origin-Opener-Policy, Cross-Origin-Resource-Policy
+- **Non-root Container** - Panel runs as a non-root user inside Docker (`no-new-privileges`)
 - **No Sensitive Data in Git** - `.env` and credentials are gitignored
 
 ### Reporting Vulnerabilities

@@ -32,6 +32,11 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+  }
   next();
 });
 app.use((req, _res, next) => {
@@ -60,7 +65,8 @@ function updateCfToken() {
 
 // ── Auth (Password only) ───────────────────────────────────────────────
 const PASSWORD_SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 jam
-const passwordSessions = new Map();
+const PASSWORD_SESSION_IDLE_MS = 30 * 60 * 1000; // idle timeout saat tidak ada aktivitas
+const passwordSessions = new Map(); // hashedSessionId -> { expiresAt, idleAt, csrfToken }
 
 function getPasswordHash() {
   const v = process.env.PASSWORD_HASH;
@@ -94,6 +100,80 @@ function verifyPasswordInput(password) {
     const derived = crypto.scryptSync(String(password || ''), String(saltValue), storedHash.length);
     return crypto.timingSafeEqual(derived, storedHash);
   } catch { return false; }
+}
+
+function safeEqual(a, b) {
+  const left = Buffer.from(String(a || ''));
+  const right = Buffer.from(String(b || ''));
+  if (!left.length || left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function hashSessionId(id) {
+  return crypto.createHash('sha256').update(String(id)).digest('hex');
+}
+
+function createSession() {
+  const raw = crypto.randomBytes(32).toString('base64url');
+  const key = hashSessionId(raw);
+  const now = Date.now();
+  const session = {
+    expiresAt: now + PASSWORD_SESSION_TTL_MS,
+    idleAt: now,
+    csrfToken: crypto.randomBytes(24).toString('hex'),
+  };
+  passwordSessions.set(key, session);
+  return { raw, key, ...session };
+}
+
+function getSession(rawId) {
+  if (!rawId) return null;
+  const key = hashSessionId(rawId);
+  const session = passwordSessions.get(key);
+  if (!session) return null;
+  const now = Date.now();
+  if (now > session.expiresAt || now > session.idleAt + PASSWORD_SESSION_IDLE_MS) {
+    passwordSessions.delete(key);
+    return null;
+  }
+  session.idleAt = now; // sliding idle window
+  return session;
+}
+
+function deleteSession(rawId) {
+  if (!rawId) return false;
+  return passwordSessions.delete(hashSessionId(rawId));
+}
+
+function cleanupSessions() {
+  const now = Date.now();
+  for (const [key, session] of passwordSessions) {
+    if (now > session.expiresAt || now > session.idleAt + PASSWORD_SESSION_IDLE_MS) {
+      passwordSessions.delete(key);
+    }
+  }
+}
+
+// ── Admin API token (for scripts / external automation) ────────────────
+function getAdminApiToken() {
+  const v = process.env.ADMIN_API_TOKEN;
+  return v && v.trim() ? v.trim() : null;
+}
+
+function extractBearerToken(req) {
+  const auth = req.get('Authorization');
+  if (auth && /^Bearer\s+/i.test(auth)) return auth.replace(/^Bearer\s+/i, '').trim();
+  const key = req.get('X-API-Key');
+  if (key) return String(key).trim();
+  return null;
+}
+
+function verifyApiToken(req) {
+  const expected = getAdminApiToken();
+  if (!expected) return false;
+  const provided = extractBearerToken(req);
+  if (!provided) return false;
+  return safeEqual(provided, expected);
 }
 
 // ── Cache ──────────────────────────────────────────────────────────────
@@ -174,23 +254,56 @@ function rateLimit(keyPrefix, max = RATE_LIMIT_MAX, windowMs = RATE_LIMIT_WINDOW
   };
 }
 
+// ── Brute-force lockout (per IP, on failed logins) ─────────────────────
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCK_MS = 15 * 60 * 1000;
+const LOGIN_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+const loginAttempts = new Map(); // ip -> { count, firstAt, lockedUntil }
+
+function isLoginLocked(ip) {
+  const entry = loginAttempts.get(ip);
+  if (!entry) return false;
+  if (entry.lockedUntil && Date.now() < entry.lockedUntil) return true;
+  if (entry.lockedUntil) loginAttempts.delete(ip);
+  return false;
+}
+function recordFailedLogin(ip) {
+  const now = Date.now();
+  const entry = loginAttempts.get(ip) || { count: 0, firstAt: now, lockedUntil: 0 };
+  if (now - entry.firstAt > LOGIN_ATTEMPT_WINDOW_MS) { entry.count = 0; entry.firstAt = now; entry.lockedUntil = 0; }
+  entry.count += 1;
+  if (entry.count >= LOGIN_MAX_ATTEMPTS) entry.lockedUntil = now + LOGIN_LOCK_MS;
+  loginAttempts.set(ip, entry);
+}
+function clearFailedLogins(ip) { loginAttempts.delete(ip); }
+
 // ── Auth middleware ────────────────────────────────────────────────────
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 const authMiddleware = (req, res, next) => {
   if (!isPasswordConfigured()) {
     return next(); // no password configured? allow access (for setup)
   }
-  const cookies = parseCookies(req.headers.cookie || '');
-  const passwordSessionId = cookies[COOKIE_PASSWORD_SESSION_ID];
-
-  if (passwordSessionId && passwordSessions.has(passwordSessionId)) {
-    const expiresAt = passwordSessions.get(passwordSessionId);
-    if (!expiresAt || Date.now() <= expiresAt) {
-      return next();
-    } else {
-      passwordSessions.delete(passwordSessionId);
-      clearAuthCookies(res);
-    }
+  // API token authentication (no CSRF required: bearer secret, not cookie-based)
+  if (verifyApiToken(req)) {
+    return next();
   }
+  const cookies = parseCookies(req.headers.cookie || '');
+  const rawSessionId = cookies[COOKIE_PASSWORD_SESSION_ID];
+  const session = rawSessionId ? getSession(rawSessionId) : null;
+
+  if (session) {
+    // Cookie-session CSRF protection: mutating requests must carry the session CSRF token
+    if (!SAFE_METHODS.has(req.method)) {
+      const token = req.get('X-CSRF-Token');
+      if (!token || !safeEqual(token, session.csrfToken)) {
+        return res.status(403).json({ error: 'Invalid CSRF token' });
+      }
+    }
+    return next();
+  }
+
+  if (rawSessionId) clearAuthCookies(res);
   return res.status(401).json({ error: 'Unauthorized. Please login.' });
 };
 
@@ -222,20 +335,26 @@ app.post('/api/login', rateLimit('login'), (req, res) => {
   }
   const password = String(req.body?.password || '').trim();
   if (!password) return res.status(400).json({ error: 'Password required' });
-  if (!verifyPasswordInput(password)) return res.status(401).json({ error: 'Invalid password' });
+  if (isLoginLocked(req.ip)) {
+    return res.status(429).json({ error: 'Terlalu banyak percobaan gagal. Coba lagi nanti.' });
+  }
 
-  const sessionId = crypto.randomBytes(16).toString('hex');
-  const expiresAt = Date.now() + PASSWORD_SESSION_TTL_MS;
-  passwordSessions.set(sessionId, expiresAt);
+  if (!verifyPasswordInput(password)) {
+    recordFailedLogin(req.ip);
+    return res.status(401).json({ error: 'Invalid password' });
+  }
+  clearFailedLogins(req.ip);
+
+  const session = createSession();
   clearAuthCookies(res);
-  setPasswordSessionCookie(res, sessionId, expiresAt);
-  res.json({ ok: true, sessionId });
+  setPasswordSessionCookie(res, session.raw, session.expiresAt);
+  res.json({ ok: true, sessionId: session.raw, csrfToken: session.csrfToken });
 });
 
 app.post('/api/logout', (req, res) => {
   const cookies = parseCookies(req.headers.cookie || '');
   const sid = cookies[COOKIE_PASSWORD_SESSION_ID];
-  if (sid) passwordSessions.delete(sid);
+  if (sid) deleteSession(sid);
   clearAuthCookies(res);
   res.json({ ok: true });
 });
@@ -243,11 +362,7 @@ app.post('/api/logout', (req, res) => {
 app.get('/api/auth-status', (req, res) => {
   const cookies = parseCookies(req.headers.cookie || '');
   const sid = cookies[COOKIE_PASSWORD_SESSION_ID];
-  let loggedIn = false;
-  if (sid && passwordSessions.has(sid)) {
-    const exp = passwordSessions.get(sid);
-    if (exp && Date.now() <= exp) loggedIn = true;
-  }
+  const loggedIn = !!(sid && getSession(sid));
   res.json({
     passwordEnabled: isPasswordConfigured(),
     loggedIn,
@@ -255,8 +370,13 @@ app.get('/api/auth-status', (req, res) => {
   });
 });
 
-app.get('/api/session', (_req, res) => {
-  res.json({ ok: true });
+app.get('/api/session', (req, res) => {
+  if (!isPasswordConfigured()) return res.json({ ok: true, setupRequired: true });
+  const cookies = parseCookies(req.headers.cookie || '');
+  const sid = cookies[COOKIE_PASSWORD_SESSION_ID];
+  const session = sid ? getSession(sid) : null;
+  if (session) return res.json({ ok: true, csrfToken: session.csrfToken });
+  return res.json({ ok: false });
 });
 
 // ── Apply auth to all /api routes (except login, logout, auth-status) ──
@@ -541,22 +661,26 @@ app.get('/api/config', (_req, res) => {
   res.json({
     account_id: process.env.CLOUDFLARE_ACCOUNT_ID || '',
     d1_database_id: process.env.CLOUDFLARE_D1_DATABASE_ID || '',
-    has_token: !!process.env.CLOUDFLARE_API_TOKEN
+    has_token: !!process.env.CLOUDFLARE_API_TOKEN,
+    has_admin_api_token: !!getAdminApiToken()
   });
 });
 
 app.post('/api/config', (req, res) => {
-  const { account_id, api_token, d1_database_id } = req.body;
+  const { account_id, api_token, d1_database_id, admin_api_token } = req.body;
   const accountVal = sanitizeEnvValue('account_id', account_id);
   if (accountVal.error) return res.status(400).json({ error: accountVal.error });
   const d1Val = sanitizeEnvValue('d1_database_id', d1_database_id);
   if (d1Val.error) return res.status(400).json({ error: d1Val.error });
   const tokenVal = sanitizeEnvValue('api_token', api_token);
   if (tokenVal.error) return res.status(400).json({ error: tokenVal.error });
+  const adminTokenVal = sanitizeEnvValue('admin_api_token', admin_api_token);
+  if (adminTokenVal.error) return res.status(400).json({ error: adminTokenVal.error });
 
   if (accountVal.value !== undefined) process.env.CLOUDFLARE_ACCOUNT_ID = accountVal.value;
   if (d1Val.value !== undefined) process.env.CLOUDFLARE_D1_DATABASE_ID = d1Val.value;
   if (tokenVal.value) process.env.CLOUDFLARE_API_TOKEN = tokenVal.value;
+  if (adminTokenVal.value !== undefined) process.env.ADMIN_API_TOKEN = adminTokenVal.value;
 
   try {
     const envPath = path.join(__dirname, '.env');
@@ -570,6 +694,7 @@ app.post('/api/config', (req, res) => {
     if (accountVal.value !== undefined) updateKey('CLOUDFLARE_ACCOUNT_ID', accountVal.value);
     if (d1Val.value !== undefined) updateKey('CLOUDFLARE_D1_DATABASE_ID', d1Val.value);
     if (tokenVal.value) updateKey('CLOUDFLARE_API_TOKEN', tokenVal.value);
+    if (adminTokenVal.value !== undefined) updateKey('ADMIN_API_TOKEN', adminTokenVal.value);
     fs.writeFileSync(envPath, content.trim() + '\n');
     updateCfToken();
     resetDomainCache();
@@ -699,9 +824,14 @@ app.get(/^(?!\/api)(?!\/health).*/, (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+setInterval(cleanupSessions, 60 * 1000).unref(); // purge expired/idle sessions
+
 app.listen(PORT, () => {
   console.log(`Email Routing Panel listening on http://localhost:${PORT}`);
   if (!isPasswordConfigured()) {
     console.log('[INFO] Password not configured. Visit the panel to set up a password.');
+  }
+  if (!getAdminApiToken()) {
+    console.log('[INFO] ADMIN_API_TOKEN not configured. API token auth is disabled.');
   }
 });

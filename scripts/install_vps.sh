@@ -38,9 +38,13 @@ install_docker() {
 prepare_env() {
   if [[ ! -f "$ROOT_DIR/.env" ]]; then
     cp "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"
-    chmod 600 "$ROOT_DIR/.env"
     echo "Created .env from .env.example."
   fi
+
+  # Container runs as non-root UID 1000 (node). Make .env writable so config/password
+  # saves from the panel UI work inside the container.
+  chown 1000:1000 "$ROOT_DIR/.env"
+  chmod 600 "$ROOT_DIR/.env"
 
   local existing_domain domain
   existing_domain="$(sed -n 's/^CADDY_DOMAIN=//p' "$ROOT_DIR/.env" | head -n 1)"

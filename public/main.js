@@ -31,6 +31,7 @@ const state = {
 };
 
 let sessionOk = false;
+let csrfToken = null;
 
 const accentPresets = {
   ocean: { accent: '#5aa9ff', accent2: '#7fd1ff', accent3: '#3c6fff' },
@@ -69,11 +70,16 @@ function generateEmailName() {
   input.focus();
 }
 
-async function api(path, opts) {
-  const headers = { 'Content-Type': 'application/json' };
+async function api(path, opts = {}) {
+  const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+  const method = String(opts.method || 'GET').toUpperCase();
+  if (csrfToken && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    headers['X-CSRF-Token'] = csrfToken;
+  }
   const res = await fetch(path, Object.assign({ headers, credentials: 'include' }, opts));
   if (res.status === 401) {
     sessionOk = false;
+    csrfToken = null;
     showLogin();
     throw new Error('Unauthorized');
   }
@@ -330,11 +336,13 @@ function toggleSidebar() {
 
 async function checkSession() {
   try {
-    await api('/api/session');
-    sessionOk = true;
-    return true;
+    const data = await api('/api/session');
+    sessionOk = !!data.ok;
+    if (data.csrfToken) csrfToken = data.csrfToken;
+    return sessionOk;
   } catch {
     sessionOk = false;
+    csrfToken = null;
     return false;
   }
 }
@@ -373,7 +381,8 @@ async function handleLogin(event) {
     return;
   }
   try {
-    await api('/api/login', { method: 'POST', body: JSON.stringify({ password }) });
+    const data = await api('/api/login', { method: 'POST', body: JSON.stringify({ password }) });
+    if (data.csrfToken) csrfToken = data.csrfToken;
     hideLogin();
     sessionOk = true;
     await loadRules();
@@ -398,13 +407,8 @@ async function handleSetupPassword(event) {
   }
   setSetupNotice('');
   try {
-    const res = await fetch('/api/setup-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Gagal set password');
+    const data = await api('/api/setup-password', { method: 'POST', body: JSON.stringify({ password }) });
+    if (data.csrfToken) csrfToken = data.csrfToken;
     showNotification(data.message || 'Password berhasil diset!', 'success');
     hideSetupPassword();
     showLogin();
@@ -446,8 +450,11 @@ function toggleInputVisibility(input, button) {
 }
 
 function updateTokenToggleVisibility() {
-  const input = document.getElementById('cfgApiToken');
-  const button = document.getElementById('cfgApiTokenToggle');
+  syncTokenToggleVisibility(document.getElementById('cfgApiToken'), document.getElementById('cfgApiTokenToggle'));
+  syncTokenToggleVisibility(document.getElementById('cfgAdminApiToken'), document.getElementById('cfgAdminApiTokenToggle'));
+}
+
+function syncTokenToggleVisibility(input, button) {
   if (!input || !button) return;
   const hasValue = input.value.trim().length > 0;
   button.classList.toggle('is-hidden', !hasValue);
@@ -529,6 +536,11 @@ async function loadSettings() {
     tokenInput.value = '';
     tokenInput.placeholder = config.has_token ? '******** (Set to update)' : 'Enter API Token';
     updateTokenToggleVisibility();
+    const adminTokenInput = document.getElementById('cfgAdminApiToken');
+    if (adminTokenInput) {
+      adminTokenInput.value = '';
+      adminTokenInput.placeholder = config.has_admin_api_token ? '******** (Set to update)' : 'Enter Admin API Token';
+    }
   } catch (e) {
     showNotification('Could not load config: ' + e.message, 'error');
   }
@@ -539,7 +551,8 @@ async function saveSettings(e) {
   const body = {
     account_id: document.getElementById('cfgAccountId').value.trim(),
     d1_database_id: document.getElementById('cfgD1DatabaseId').value.trim(),
-    api_token: document.getElementById('cfgApiToken').value.trim()
+    api_token: document.getElementById('cfgApiToken').value.trim(),
+    admin_api_token: document.getElementById('cfgAdminApiToken').value.trim()
   };
   try {
     await api('/api/config', { method: 'POST', body: JSON.stringify(body) });
@@ -1503,6 +1516,7 @@ async function deleteEmail() {
 
 async function handleLogout() {
   try { await fetch('/api/logout', { method: 'POST', credentials: 'include' }); } catch {}
+  csrfToken = null;
   localStorage.removeItem('selectedAddress');
   state.rules = [];
   state.ruleMap = new Map();
@@ -1618,6 +1632,8 @@ document.addEventListener('DOMContentLoaded', async function () {
 
   const tokenInput = document.getElementById('cfgApiToken');
   if (tokenInput) tokenInput.addEventListener('input', updateTokenToggleVisibility);
+  const adminTokenInput = document.getElementById('cfgAdminApiToken');
+  if (adminTokenInput) adminTokenInput.addEventListener('input', updateTokenToggleVisibility);
 
   const logoutBtn = document.getElementById('btn-logout');
   if (logoutBtn) logoutBtn.addEventListener('click', handleLogout);
