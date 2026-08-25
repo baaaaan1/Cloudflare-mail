@@ -39,6 +39,7 @@ We take security seriously. If you discover a security vulnerability in Cloudfla
 ### Authentication
 
 - Password-only authentication with salted hash (scrypt, timing-safe compare)
+- Optional TOTP 2FA via authenticator apps (set `TOTP_SECRET` in environment for persistence)
 - Session IDs stored hashed (SHA-256) in memory; never kept in raw form
 - Secure session management with HttpOnly, SameSite=Strict cookies
 - Rate limiting on login attempts (10 attempts per 5 minutes)

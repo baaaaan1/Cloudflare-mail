@@ -19,6 +19,7 @@ Self-hosted panel to manage Cloudflare Email Routing, destinations, rules, and i
 - **Catch-All Rules** - Configure catch-all email routing
 - **Worker Integration** - Route emails to Cloudflare Workers
 - **Password Protection** - Secure your panel with password authentication
+- **Two-Factor (TOTP)** - Optional 2FA using authenticator apps
 - **Diagnostics** - Check Cloudflare API connectivity and permissions
 - **Dark Mode** - Beautiful dark theme with responsive design
 - **Security First** - CSP, HSTS, rate limiting, and more
@@ -175,6 +176,7 @@ only the panel and lets Dokploy's built-in Traefik proxy handle TLS + domains.
    CLOUDFLARE_D1_DATABASE_ID=your_d1_database_id
    PASSWORD=your-login-password
    ADMIN_API_TOKEN=optional_script_token
+   TOTP_SECRET=optional_totp_base32_secret
    ```
 
    `PASSWORD` is your plain login password — the server auto-generates
@@ -184,6 +186,13 @@ only the panel and lets Dokploy's built-in Traefik proxy handle TLS + domains.
 
    ```bash
    node scripts/generate-password.js --password "your-secret"
+   ```
+
+   Prefer TOTP-only login? Skip `PASSWORD` and set `TOTP_SECRET` instead.
+   Generate it once with:
+
+   ```bash
+   node scripts/generate-totp-secret.js
    ```
 
 4. In **Domains**, add your domain. Dokploy routes traffic to the panel (internal
@@ -207,8 +216,9 @@ only the panel and lets Dokploy's built-in Traefik proxy handle TLS + domains.
 | `PASSWORD_SALT` | No | Password salt (hex). Optional if `PASSWORD` is set |
 | `PASSWORD` | No* | Plain login password — `PASSWORD_SALT`/`PASSWORD_HASH` are generated automatically at startup. Easiest for Dokploy/Compose deploys |
 | `ADMIN_API_TOKEN` | No | Optional token for scripted/remote API access (`Authorization: Bearer <token>` or `X-API-Key`) |
+| `TOTP_SECRET` | No | Base32 TOTP secret for 2FA login (generate with `scripts/generate-totp-secret.js`) |
 
-\* One of `PASSWORD`, or `PASSWORD_HASH` + `PASSWORD_SALT`, is required to protect the panel.
+\* One of `PASSWORD`, `PASSWORD_HASH` + `PASSWORD_SALT`, or `TOTP_SECRET` is required to protect the panel. You can combine password and TOTP for two-factor login.
 
 ### Cloudflare API Token Permissions
 
@@ -363,6 +373,7 @@ npm run deploy:worker  # Deploy Cloudflare Worker
 ## Security
 
 - **Password Authentication** - Secure your panel with a password (scrypt, salted, timing-safe compare)
+- **Two-Factor (TOTP)** - Optional 2FA via authenticator apps (Google Authenticator, Aegis, Authy, ...)
 - **API Token Auth** - Optional `ADMIN_API_TOKEN` for scripted/remote access
 - **Rate Limiting** - Protection against brute-force attacks
 - **Login Lockout** - Temporary per-IP lockout after repeated failed logins

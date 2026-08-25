@@ -108,6 +108,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🔒 Security
 - `PASSWORD` env var: set a plain login password and `PASSWORD_SALT`/`PASSWORD_HASH` are generated automatically at startup (ideal for Dokploy/Compose deploys; explicit hash+salt still take precedence)
+- TOTP 2FA: optional two-factor auth via authenticator apps (`TOTP_SECRET` env or enroll from Settings), survives restarts when stored in environment
+- `/api/totp/setup`, `/api/totp/activate`, `/api/totp/disable` endpoints for enrollment
 
 ### Planned Features
 - [ ] Email filtering rules
@@ -116,7 +118,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] Webhook notifications
 - [ ] Multi-user support
 - [ ] Export/Import settings
-- [ ] Two-factor authentication
 
 ---
 

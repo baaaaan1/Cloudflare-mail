@@ -8,6 +8,8 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const speakeasy = require('speakeasy');
+const QRCode = require('qrcode');
 require('dotenv').config();
 
 const app = express();
@@ -194,6 +196,30 @@ function verifyApiToken(req) {
   return safeEqual(provided, expected);
 }
 
+// ── Two-factor auth (TOTP) ─────────────────────────────────────────────
+function getTotpSecret() {
+  const v = process.env.TOTP_SECRET;
+  if (!v || !v.trim()) return null;
+  return v.trim().replace(/\s+/g, '').toUpperCase();
+}
+
+function verifyTotpCode(secret, token) {
+  if (!secret || !token) return false;
+  try {
+    return !!speakeasy.totp.verify({ secret, encoding: 'base32', token, window: 1 });
+  } catch { return false; }
+}
+
+function writeEnvKey(key, val) {
+  const envPath = path.join(__dirname, '.env');
+  let content = '';
+  if (fs.existsSync(envPath)) content = fs.readFileSync(envPath, 'utf8');
+  const regex = new RegExp(`^${key}=.*`, 'm');
+  if (regex.test(content)) content = content.replace(regex, `${key}=${val}`);
+  else content += `\n${key}=${val}`;
+  fs.writeFileSync(envPath, content.trim() + '\n');
+}
+
 // ── Cache ──────────────────────────────────────────────────────────────
 const DOMAIN_CACHE_TTL_MS = 5 * 60 * 1000;
 const domainCache = { data: null, expiresAt: 0 };
@@ -348,21 +374,32 @@ function sanitizeEnvValue(label, value) {
 
 // ── Login endpoint ─────────────────────────────────────────────────────
 app.post('/api/login', rateLimit('login'), (req, res) => {
-  if (!isPasswordConfigured()) {
-    return res.status(400).json({ error: 'Password not configured. Set PASSWORD_HASH and PASSWORD_SALT in .env' });
+  const passwordEnabled = isPasswordConfigured();
+  const totpEnabled = !!getTotpSecret();
+  if (!passwordEnabled && !totpEnabled) {
+    return res.status(400).json({ error: 'Auth not configured. Set PASSWORD (or PASSWORD_HASH + PASSWORD_SALT) and/or TOTP_SECRET.' });
   }
-  const password = String(req.body?.password || '').trim();
-  if (!password) return res.status(400).json({ error: 'Password required' });
   if (isLoginLocked(req.ip)) {
     return res.status(429).json({ error: 'Terlalu banyak percobaan gagal. Coba lagi nanti.' });
   }
 
-  if (!verifyPasswordInput(password)) {
+  const fail = () => {
     recordFailedLogin(req.ip);
-    return res.status(401).json({ error: 'Invalid password' });
-  }
-  clearFailedLogins(req.ip);
+    return res.status(401).json({ error: 'Invalid credentials' });
+  };
 
+  if (passwordEnabled) {
+    const password = String(req.body?.password || '').trim();
+    if (!password) return res.status(400).json({ error: 'Password required' });
+    if (!verifyPasswordInput(password)) return fail();
+  }
+  if (totpEnabled) {
+    const token = String(req.body?.token || '').replace(/[\s-]/g, '');
+    if (!token) return res.status(400).json({ error: '2FA code required' });
+    if (!verifyTotpCode(getTotpSecret(), token)) return fail();
+  }
+
+  clearFailedLogins(req.ip);
   const session = createSession();
   clearAuthCookies(res);
   setPasswordSessionCookie(res, session.raw, session.expiresAt);
@@ -383,6 +420,7 @@ app.get('/api/auth-status', (req, res) => {
   const loggedIn = !!(sid && getSession(sid));
   res.json({
     passwordEnabled: isPasswordConfigured(),
+    totpEnabled: !!getTotpSecret(),
     loggedIn,
     authRequired: true,
   });
@@ -680,7 +718,8 @@ app.get('/api/config', (_req, res) => {
     account_id: process.env.CLOUDFLARE_ACCOUNT_ID || '',
     d1_database_id: process.env.CLOUDFLARE_D1_DATABASE_ID || '',
     has_token: !!process.env.CLOUDFLARE_API_TOKEN,
-    has_admin_api_token: !!getAdminApiToken()
+    has_admin_api_token: !!getAdminApiToken(),
+    has_totp: !!getTotpSecret()
   });
 });
 
@@ -804,6 +843,47 @@ app.get('/api/diagnostics', async (_req, res) => {
   res.json({ ok: allOk, checks });
 });
 
+// ── Two-factor (TOTP) management ───────────────────────────────────────
+let pendingTotpSecret = null;
+
+app.post('/api/totp/setup', (_req, res) => {
+  try {
+    const secret = speakeasy.generateSecret({ length: 20 });
+    const otpauthUrl = `otpauth://totp/${encodeURIComponent('Cloudflare Email Panel:admin')}?secret=${secret.base32}&issuer=${encodeURIComponent('Cloudflare Email Panel')}`;
+    pendingTotpSecret = secret.base32;
+    QRCode.toDataURL(otpauthUrl, { margin: 1 }, (err, dataUrl) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ secret: secret.base32, otpauth_url: otpauthUrl, qr_data_url: dataUrl });
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/totp/activate', (req, res) => {
+  const token = String(req.body?.token || '').replace(/[\s-]/g, '');
+  if (!pendingTotpSecret) return res.status(400).json({ error: 'No pending 2FA setup. Call setup first.' });
+  if (!token) return res.status(400).json({ error: 'Code required' });
+  if (!verifyTotpCode(pendingTotpSecret, token)) return res.status(401).json({ error: 'Invalid code' });
+  const secret = pendingTotpSecret;
+  pendingTotpSecret = null;
+  process.env.TOTP_SECRET = secret;
+  let persisted = false;
+  try { writeEnvKey('TOTP_SECRET', secret); persisted = true; } catch { /* read-only fs (e.g. Dokploy) */ }
+  res.json({
+    ok: true,
+    persisted,
+    message: persisted
+      ? '2FA aktif dan tersimpan di .env'
+      : '2FA aktif untuk sesi ini. Agar bertahan saat restart/redeploy, set TOTP_SECRET di environment.',
+  });
+});
+
+app.post('/api/totp/disable', (_req, res) => {
+  delete process.env.TOTP_SECRET;
+  try { writeEnvKey('TOTP_SECRET', ''); } catch { /* read-only fs */ }
+  pendingTotpSecret = null;
+  res.json({ ok: true });
+});
+
 // ── Password management (set via API, for initial setup) ───────────────
 app.post('/api/setup-password', rateLimit('setup-password', 5), (req, res) => {
   const password = String(req.body?.password || '').trim();
@@ -846,8 +926,8 @@ setInterval(cleanupSessions, 60 * 1000).unref(); // purge expired/idle sessions
 
 app.listen(PORT, () => {
   console.log(`Email Routing Panel listening on http://localhost:${PORT}`);
-  if (!isPasswordConfigured()) {
-    console.log('[INFO] Password not configured. Visit the panel to set up a password.');
+  if (!isPasswordConfigured() && !getTotpSecret()) {
+    console.log('[INFO] No login method configured. Set PASSWORD and/or TOTP_SECRET, or visit the panel for setup.');
   }
   if (!getAdminApiToken()) {
     console.log('[INFO] ADMIN_API_TOKEN not configured. API token auth is disabled.');

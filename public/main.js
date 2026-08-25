@@ -32,6 +32,8 @@ const state = {
 
 let sessionOk = false;
 let csrfToken = null;
+let totpEnabled = false;
+let pendingTotp = null;
 
 const accentPresets = {
   ocean: { accent: '#5aa9ff', accent2: '#7fd1ff', accent3: '#3c6fff' },
@@ -93,12 +95,18 @@ function showLogin() {
   document.body.classList.add('login-active');
   const setupModal = document.getElementById('setupPasswordModal');
   if (setupModal) setupModal.classList.remove('active');
+  updateTotpVisibility();
 }
 
 function hideLogin() {
   const modal = document.getElementById('loginModal');
   if (modal) modal.classList.remove('active');
   document.body.classList.remove('login-active');
+}
+
+function updateTotpVisibility() {
+  const group = document.getElementById('totpGroup');
+  if (group) group.classList.toggle('is-hidden', !totpEnabled);
 }
 
 function showSetupPassword() {
@@ -376,12 +384,17 @@ function setSetupNotice(message, tone = 'warning') {
 async function handleLogin(event) {
   event.preventDefault();
   const password = document.getElementById('passwordInput').value;
-  if (!password) {
+  const token = document.getElementById('totpInput')?.value.trim() || '';
+  if (!password && !totpEnabled) {
     showNotification('Password required', 'error');
     return;
   }
+  if (totpEnabled && !token) {
+    showNotification('2FA code required', 'error');
+    return;
+  }
   try {
-    const data = await api('/api/login', { method: 'POST', body: JSON.stringify({ password }) });
+    const data = await api('/api/login', { method: 'POST', body: JSON.stringify({ password, token }) });
     if (data.csrfToken) csrfToken = data.csrfToken;
     hideLogin();
     sessionOk = true;
@@ -558,8 +571,70 @@ async function saveSettings(e) {
     await api('/api/config', { method: 'POST', body: JSON.stringify(body) });
     showNotification('Configuration saved!', 'success');
     loadDomains(true);
+    loadTotpStatus();
   } catch (err) {
     showNotification('Save failed: ' + err.message, 'error');
+  }
+}
+
+async function loadTotpStatus() {
+  try {
+    const config = await api('/api/config');
+    const enabled = !!config.has_totp;
+    totpEnabled = enabled;
+    updateTotpVisibility();
+    const statusEl = document.getElementById('totpStatus');
+    statusEl.textContent = enabled ? '2FA aktif' : '2FA tidak aktif';
+    statusEl.className = enabled ? 'field-help ok' : 'field-help';
+    const disableBtn = document.getElementById('btn-totp-disable');
+    if (disableBtn) disableBtn.classList.toggle('is-hidden', !enabled);
+  } catch (e) {
+    const statusEl = document.getElementById('totpStatus');
+    if (statusEl) statusEl.textContent = 'Gagal memuat status 2FA';
+  }
+}
+
+async function setupTotp() {
+  try {
+    pendingTotp = await api('/api/totp/setup', { method: 'POST' });
+    const enroll = document.getElementById('totpEnroll');
+    if (enroll) {
+      enroll.classList.remove('is-hidden');
+      const qr = document.getElementById('totpQr');
+      const secretText = document.getElementById('totpSecretText');
+      const confirm = document.getElementById('totpConfirmCode');
+      if (qr) qr.src = pendingTotp.qr_data_url;
+      if (secretText) secretText.textContent = pendingTotp.secret;
+      if (confirm) confirm.value = '';
+    }
+  } catch (e) {
+    showNotification('Gagal generate 2FA: ' + e.message, 'error');
+  }
+}
+
+async function activateTotp() {
+  const code = document.getElementById('totpConfirmCode')?.value.trim() || '';
+  if (!code) { showNotification('Masukkan kode 6 digit', 'error'); return; }
+  try {
+    const data = await api('/api/totp/activate', { method: 'POST', body: JSON.stringify({ token: code }) });
+    showNotification(data.message || '2FA aktif', 'success');
+    pendingTotp = null;
+    const enroll = document.getElementById('totpEnroll');
+    if (enroll) enroll.classList.add('is-hidden');
+    loadTotpStatus();
+  } catch (e) {
+    showNotification('Activate failed: ' + e.message, 'error');
+  }
+}
+
+async function disableTotp() {
+  if (!confirm('Nonaktifkan 2FA?')) return;
+  try {
+    await api('/api/totp/disable', { method: 'POST' });
+    showNotification('2FA dinonaktifkan', 'success');
+    loadTotpStatus();
+  } catch (e) {
+    showNotification('Gagal menonaktifkan: ' + e.message, 'error');
   }
 }
 
@@ -1606,9 +1681,9 @@ document.addEventListener('DOMContentLoaded', async function () {
   } catch {}
 
   const passwordConfigured = authStatus && authStatus.passwordEnabled;
+  totpEnabled = !!(authStatus && authStatus.totpEnabled);
 
   if (passwordConfigured) {
-    // Try session
     const ok = await checkSession();
     if (ok) {
       hideLogin();
@@ -1618,8 +1693,11 @@ document.addEventListener('DOMContentLoaded', async function () {
       setAuthNotice('');
       showLogin();
     }
+  } else if (totpEnabled) {
+    hideLogin();
+    showSetupPassword();
+    setSetupNotice('Panel menggunakan 2FA. Isi TOTP_SECRET di environment deploy, lalu login dengan kode authenticator.', 'warning');
   } else {
-    // Password not configured - show setup
     hideLogin();
     showSetupPassword();
   }
@@ -1629,6 +1707,14 @@ document.addEventListener('DOMContentLoaded', async function () {
     settingsForm.addEventListener('submit', saveSettings);
     settingsForm.addEventListener('click', handleSettingsAction);
   }
+
+  await loadTotpStatus();
+  const btnTotpSetup = document.getElementById('btn-totp-setup');
+  if (btnTotpSetup) btnTotpSetup.addEventListener('click', setupTotp);
+  const btnTotpActivate = document.getElementById('btn-totp-activate');
+  if (btnTotpActivate) btnTotpActivate.addEventListener('click', activateTotp);
+  const btnTotpDisable = document.getElementById('btn-totp-disable');
+  if (btnTotpDisable) btnTotpDisable.addEventListener('click', disableTotp);
 
   const tokenInput = document.getElementById('cfgApiToken');
   if (tokenInput) tokenInput.addEventListener('input', updateTokenToggleVisibility);

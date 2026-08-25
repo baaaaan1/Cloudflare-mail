@@ -28,11 +28,15 @@
     <div class="modal-body">
      <div class="auth-notice is-hidden" id="authNotice"></div>
      <form id="loginForm">
-      <div class="form-group" id="passwordGroup">
-       <label class="form-label" for="passwordInput">Password</label>
-       <input type="password" id="passwordInput" class="form-input" placeholder="Enter your password" autocomplete="current-password" required>
-      </div>
-     </form>
+       <div class="form-group" id="passwordGroup">
+        <label class="form-label" for="passwordInput">Password</label>
+        <input type="password" id="passwordInput" class="form-input" placeholder="Enter your password" autocomplete="current-password" required>
+       </div>
+       <div class="form-group is-hidden" id="totpGroup">
+        <label class="form-label" for="totpInput">Kode 2FA</label>
+        <input type="text" id="totpInput" class="form-input" placeholder="123456" inputmode="numeric" autocomplete="one-time-code">
+       </div>
+      </form>
     </div>
     <div class="modal-actions">
      <button type="submit" form="loginForm" class="btn" id="loginSubmitBtn">Login</button>
@@ -138,7 +142,22 @@
     </section>
 
      <section class="sidebar-section">
-      <div class="section-title"><span class="material-icons">palette</span> Theme</div>
+      <div class="section-title"><span class="material-icons">phonelink_lock</span> Two-Factor (TOTP)</div>
+      <div class="field-help" id="totpStatus">Checking...</div>
+      <div class="stack">
+        <button type="button" class="btn btn-secondary" id="btn-totp-setup">Generate QR / Secret</button>
+        <div class="stack is-hidden" id="totpEnroll">
+          <img id="totpQr" alt="2FA QR" style="max-width:220px;image-rendering:pixelated;" />
+          <code id="totpSecretText" style="display:block;word-break:break-all;"></code>
+          <input type="text" id="totpConfirmCode" class="form-input" placeholder="Masukkan kode 6 digit dari app" inputmode="numeric">
+          <button type="button" class="btn" id="btn-totp-activate">Activate 2FA</button>
+        </div>
+        <button type="button" class="btn btn-secondary is-hidden" id="btn-totp-disable">Disable 2FA</button>
+      </div>
+     </section>
+
+      <section class="sidebar-section">
+       <div class="section-title"><span class="material-icons">palette</span> Theme</div>
      <div class="theme-presets" id="themePresets">
       <button type="button" class="chip" data-preset="ocean">Ocean</button>
       <button type="button" class="chip" data-preset="purple">Purple</button>
