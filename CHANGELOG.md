@@ -106,6 +106,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔒 Security
+- `PASSWORD` env var: set a plain login password and `PASSWORD_SALT`/`PASSWORD_HASH` are generated automatically at startup (ideal for Dokploy/Compose deploys; explicit hash+salt still take precedence)
+
 ### Planned Features
 - [ ] Email filtering rules
 - [ ] Bulk destination management

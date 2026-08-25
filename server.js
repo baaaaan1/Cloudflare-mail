@@ -102,6 +102,24 @@ function verifyPasswordInput(password) {
   } catch { return false; }
 }
 
+// Auto-generate PASSWORD_SALT/PASSWORD_HASH from a plain PASSWORD env var
+// (e.g. set via Dokploy Environment). A fresh random salt is derived on every
+// boot together with its hash, so no persistence is needed. Explicit
+// PASSWORD_HASH/PASSWORD_SALT always take precedence.
+(function deriveCredentialsFromPlainPassword() {
+  const plain = process.env.PASSWORD;
+  const trimmed = plain && String(plain).trim();
+  if (!trimmed) return;
+  if (getPasswordHash() && getPasswordSalt()) return;
+  if (trimmed.length < 8) {
+    console.warn('[WARN] PASSWORD is shorter than 8 characters.');
+  }
+  const salt = crypto.randomBytes(16).toString('hex');
+  process.env.PASSWORD_SALT = salt;
+  process.env.PASSWORD_HASH = crypto.scryptSync(trimmed, salt, 64).toString('hex');
+  console.log('[INFO] PASSWORD detected: PASSWORD_SALT/PASSWORD_HASH generated at startup.');
+})();
+
 function safeEqual(a, b) {
   const left = Buffer.from(String(a || ''));
   const right = Buffer.from(String(b || ''));

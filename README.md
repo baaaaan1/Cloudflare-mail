@@ -173,12 +173,14 @@ only the panel and lets Dokploy's built-in Traefik proxy handle TLS + domains.
    CLOUDFLARE_API_TOKEN=your_api_token
    CLOUDFLARE_ACCOUNT_ID=your_account_id
    CLOUDFLARE_D1_DATABASE_ID=your_d1_database_id
-   PASSWORD_SALT=generated_salt
-   PASSWORD_HASH=generated_hash
+   PASSWORD=your-login-password
    ADMIN_API_TOKEN=optional_script_token
    ```
 
-   Generate the password first, then copy both values:
+   `PASSWORD` is your plain login password — the server auto-generates
+   `PASSWORD_SALT`/`PASSWORD_HASH` from it at startup (a fresh random salt every
+   boot). Prefer pre-computed values? Set `PASSWORD_HASH` + `PASSWORD_SALT`
+   instead, generated with:
 
    ```bash
    node scripts/generate-password.js --password "your-secret"
@@ -201,9 +203,12 @@ only the panel and lets Dokploy's built-in Traefik proxy handle TLS + domains.
 | `CLOUDFLARE_API_TOKEN` | Yes | Cloudflare API token with required permissions |
 | `CLOUDFLARE_ACCOUNT_ID` | Yes | Your Cloudflare account ID |
 | `CLOUDFLARE_D1_DATABASE_ID` | No | D1 database ID (required for inbox feature) |
-| `PASSWORD_HASH` | No (unless password set) | Password hash (scrypt, hex) generated via panel setup or `scripts/generate-password.js` |
-| `PASSWORD_SALT` | No (unless password set) | Password salt (hex) generated via panel setup or `scripts/generate-password.js` |
+| `PASSWORD_HASH` | No | Password hash (scrypt, hex). Optional if `PASSWORD` is set |
+| `PASSWORD_SALT` | No | Password salt (hex). Optional if `PASSWORD` is set |
+| `PASSWORD` | No* | Plain login password — `PASSWORD_SALT`/`PASSWORD_HASH` are generated automatically at startup. Easiest for Dokploy/Compose deploys |
 | `ADMIN_API_TOKEN` | No | Optional token for scripted/remote API access (`Authorization: Bearer <token>` or `X-API-Key`) |
+
+\* One of `PASSWORD`, or `PASSWORD_HASH` + `PASSWORD_SALT`, is required to protect the panel.
 
 ### Cloudflare API Token Permissions
 
