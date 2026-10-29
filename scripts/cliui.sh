@@ -33,46 +33,179 @@ FOLLOW_LOGS=1
 GENERATED_PASSWORD=""
 COMPOSE_CMD=()
 
-if [[ -t 1 ]]; then
-  BOLD=$'\033[1m'
-  RED=$'\033[31m'
-  GREEN=$'\033[32m'
-  YELLOW=$'\033[33m'
-  CYAN=$'\033[36m'
-  NC=$'\033[0m'
-else
-  BOLD=""
-  RED=""
-  GREEN=""
-  YELLOW=""
-  CYAN=""
-  NC=""
-fi
+# --- Terminal styling --------------------------------------------------------
+COLOR_MODE=0
+UNICODE=0
+RESET=""
+BOLD=""
+DIM=""
+RED=""
+GREEN=""
+YELLOW=""
+BLUE=""
+MAGENTA=""
+CYAN=""
+WHITE=""
+GREY=""
+ORANGE=""
+SYM_INFO=""
+SYM_OK=""
+SYM_WARN=""
+SYM_ERR=""
+SYM_ASK=""
+SYM_ARROW=""
+
+LOGO=(
+  ' ██████╗  ███████╗  ███╗   ███╗   █████╗   ██╗ ██╗'
+  '██╔════╝  ██╔════╝  ████╗ ████║  ██╔══██╗  ██║ ██║'
+  '██║       █████╗    ██╔████╔██║  ███████║  ██║ ██║'
+  '██║       ██╔══╝    ██║╚██╔╝██║  ██╔══██║  ██║ ██║'
+  '╚██████╗  ██║       ██║ ╚═╝ ██║  ██║  ██║  ██║ ███████╗'
+  ' ╚═════╝  ╚═╝       ╚═╝     ╚═╝  ╚═╝  ╚═╝  ╚═╝ ╚══════╝'
+)
+LOGO_SHADES=(202 208 214 220 214 208)
+
+is_utf8() {
+  local loc="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+  if [[ -z "$loc" ]]; then
+    return 0
+  fi
+  if [[ "$loc" == *[Uu][Tt][Ff]-8* || "$loc" == *[Uu][Tt][Ff]8* ]]; then
+    return 0
+  fi
+  case "${loc^^}" in
+    C | POSIX | *ANSI_X3.4*) return 1 ;;
+  esac
+  return 0
+}
+
+init_colors() {
+  local colors=8
+  if is_utf8; then
+    UNICODE=1
+  fi
+
+  if [[ -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" && -t 1 ]]; then
+    colors="$(tput colors 2>/dev/null || printf '8')"
+    [[ "$colors" =~ ^[0-9]+$ ]] || colors=8
+
+    if ((colors >= 256)); then
+      COLOR_MODE=256
+      RESET=$'\033[0m'
+      BOLD=$'\033[1m'
+      DIM=$'\033[2m'
+      RED=$'\033[38;5;203m'
+      GREEN=$'\033[38;5;114m'
+      YELLOW=$'\033[38;5;221m'
+      BLUE=$'\033[38;5;75m'
+      MAGENTA=$'\033[38;5;176m'
+      CYAN=$'\033[38;5;80m'
+      WHITE=$'\033[38;5;255m'
+      GREY=$'\033[38;5;245m'
+      ORANGE=$'\033[38;5;209m'
+    elif ((colors >= 8)); then
+      COLOR_MODE=8
+      RESET=$'\033[0m'
+      BOLD=$'\033[1m'
+      DIM=$'\033[2m'
+      RED=$'\033[31m'
+      GREEN=$'\033[32m'
+      YELLOW=$'\033[33m'
+      BLUE=$'\033[34m'
+      MAGENTA=$'\033[35m'
+      CYAN=$'\033[36m'
+      WHITE=$'\033[97m'
+      GREY=$'\033[90m'
+      ORANGE=$'\033[33m'
+    fi
+  fi
+
+  if [[ "$UNICODE" -eq 1 && "$COLOR_MODE" -ne 0 ]]; then
+    SYM_INFO="◆"
+    SYM_OK="✔"
+    SYM_WARN="▲"
+    SYM_ERR="✖"
+    SYM_ASK="?"
+    SYM_ARROW="▸"
+  else
+    SYM_INFO="*>"
+    SYM_OK="[ok]"
+    SYM_WARN="[warn]"
+    SYM_ERR="[error]"
+    SYM_ASK="??"
+    SYM_ARROW=">"
+  fi
+}
+
+term_width() {
+  local cols="${COLUMNS:-0}"
+  if [[ ! "$cols" =~ ^[0-9]+$ || "$cols" -le 0 ]]; then
+    cols="$(tput cols 2>/dev/null || printf '0')"
+  fi
+  [[ "$cols" =~ ^[0-9]+$ ]] || cols=0
+  if ((cols < 46)); then
+    cols=46
+  fi
+  if ((cols > 78)); then
+    cols=78
+  fi
+  printf '%s' "$cols"
+}
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
 trap 'err "Command failed at line ${LINENO}."' ERR
 
-info() { printf '%s==>%s %s\n' "$CYAN" "$NC" "$*"; }
-ok() { printf '%s[ok]%s %s\n' "$GREEN" "$NC" "$*"; }
-warn() { printf '%s[warn]%s %s\n' "$YELLOW" "$NC" "$*" >&2; }
-err() { printf '%s[error]%s %s\n' "$RED" "$NC" "$*" >&2; }
+info() { printf '%s%s%s %s\n' "${BOLD}${CYAN}" "$SYM_INFO" "$RESET" "$*"; }
+ok() { printf '%s%s%s %s\n' "${BOLD}${GREEN}" "$SYM_OK" "$RESET" "$*"; }
+warn() { printf '%s%s%s %s\n' "${BOLD}${YELLOW}" "$SYM_WARN" "$RESET" "$*" >&2; }
+err() { printf '%s%s%s %s\n' "${BOLD}${RED}" "$SYM_ERR" "$RESET" "$*" >&2; }
 die() {
   err "$*"
   exit 1
 }
-hr() { printf '%s\n' "------------------------------------------------------------"; }
+
+rule() {
+  local width char line="" i
+  width="$(term_width)"
+  char="-"
+  [[ "$UNICODE" -eq 1 ]] && char="─"
+  for ((i = 0; i < width; i++)); do
+    line+="$char"
+  done
+  printf '%s%s%s\n' "$GREY" "$line" "$RESET"
+}
+hr() { rule; }
 
 banner() {
-  printf '%s\n' "============================================================"
-  printf '  %s%s%s  |  VPS CLI UI\n' "$BOLD" "$APP_TITLE" "$NC"
-  printf '%s\n' "============================================================"
-  local domain
+  local domain i col
   domain="$(get_env CADDY_DOMAIN)"
-  printf '  Project : %s\n' "$ROOT_DIR"
-  printf '  Domain  : %s\n' "${domain:-<not configured>}"
-  hr
+  printf '\n'
+
+  if [[ "$UNICODE" -eq 1 && "$COLOR_MODE" -ne 0 ]] && (($(term_width) >= 58)); then
+    for i in "${!LOGO[@]}"; do
+      if [[ "$COLOR_MODE" -eq 256 ]]; then
+        col="${LOGO_SHADES[$((i % ${#LOGO_SHADES[@]}))]}"
+        printf '\033[38;5;%sm  %s\033[0m\n' "$col" "${LOGO[$i]}"
+      else
+        printf '%s  %s%s\n' "${BOLD}${ORANGE}" "${LOGO[$i]}" "$RESET"
+      fi
+    done
+  else
+    printf '  %s%s%s\n' "${BOLD}${ORANGE}" "$APP_TITLE" "$RESET"
+  fi
+
+  printf '  %sVPS CLI UI  %s %sUbuntu / Debian%s\n\n' "$DIM" "$SYM_ARROW" "$DIM" "$RESET"
+  rule
+  printf '  %s%-9s%s %s\n' "$GREY" "Project" "$RESET" "$ROOT_DIR"
+  if [[ -n "$domain" ]]; then
+    printf '  %s%-9s%s %s%s%s\n' "$GREY" "Domain" "$RESET" "${BOLD}${CYAN}" "$domain" "$RESET"
+  else
+    printf '  %s%-9s%s %s\n' "$GREY" "Domain" "$RESET" "${YELLOW}<not configured>${RESET}"
+  fi
+  rule
 }
+init_colors
 
 confirm() {
   local prompt="$1" default="${2:-n}" answer
@@ -83,14 +216,15 @@ confirm() {
     [[ "$default" == "y" ]]
     return
   fi
-  read -r -p "$prompt " answer || true
+  read -r -p "$(printf '%s%s%s %s ' "${BOLD}${YELLOW}" "$SYM_ASK" "$RESET" "$prompt")" answer || true
   answer="${answer:-$default}"
   [[ "$answer" =~ ^[Yy]$ ]]
 }
 
 press_enter() {
   [[ -t 0 ]] || return 0
-  read -r -p "Press Enter to continue..." _ || true
+  printf '%sPress Enter to continue...%s' "$DIM" "$RESET"
+  read -r _ || true
 }
 
 get_env() {
@@ -311,7 +445,7 @@ wait_healthy() {
       ok "Panel is healthy."
       return 0
     fi
-    printf '.'
+    printf '%s.%s' "$DIM" "$RESET"
     sleep 3
   done
   printf '\n'
@@ -322,14 +456,16 @@ wait_healthy() {
 print_access() {
   local domain
   domain="$(get_env CADDY_DOMAIN)"
-  hr
-  ok "Panel URL: https://${domain:-$DEFAULT_DOMAIN}"
+  printf '\n'
+  rule
+  printf '  %s%-9s%s %shttps://%s%s\n' "$GREY" "Panel URL" "$RESET" "${BOLD}${CYAN}" "${domain:-$DEFAULT_DOMAIN}" "$RESET"
   if [[ -n "$GENERATED_PASSWORD" ]]; then
-    printf '%s\n' "  Login password (generated): $GENERATED_PASSWORD"
+    printf '  %s%-9s%s %s%s%s %s(generated)%s\n' "$GREY" "Password" "$RESET" "${BOLD}${YELLOW}" "$GENERATED_PASSWORD" "$RESET" "$DIM" "$RESET"
   else
-    printf '%s\n' "  Login password: value of APP_PASSWORD in .env"
+    printf '  %s%-9s%s %sAPP_PASSWORD%s in .env\n' "$GREY" "Password" "$RESET" "$BOLD" "$RESET"
   fi
-  printf '%s\n' "  Logs: sudo bash $SELF logs"
+  printf '  %s%-9s%s sudo bash %s logs\n' "$GREY" "Logs" "$RESET" "$SELF"
+  rule
   warn "Point the domain's DNS A record at this VPS and keep TCP 80/443 open."
 }
 
@@ -445,7 +581,7 @@ cmd_status() {
   else
     warn "Panel API is not responding. Check logs: sudo bash $SELF logs"
   fi
-  printf '  URL: https://%s\n' "$(get_env CADDY_DOMAIN)"
+  printf '  %s%-9s%s %shttps://%s%s\n' "$GREY" "Panel URL" "$RESET" "${BOLD}${CYAN}" "$(get_env CADDY_DOMAIN)" "$RESET"
 }
 
 cmd_logs() {
@@ -501,37 +637,39 @@ cmd_update() {
   print_access
 }
 
+help_row() { printf '  %s%-16s%s %s\n' "$ORANGE" "$1" "$RESET" "$2"; }
+help_section() { printf '\n  %s%s%s\n' "${BOLD}${GREY}" "$1" "$RESET"; }
+
 show_help() {
-  cat <<EOF
-$APP_TITLE - VPS CLI UI (Ubuntu/Debian)
+  printf '\n  %s%s%s  %s%s%s\n' "$BOLD" "$APP_TITLE" "$RESET" "$DIM" "$SYM_ARROW VPS CLI UI (Ubuntu/Debian)" "$RESET"
+  rule
+  printf '  %s%-9s%s %s\n' "$GREY" "Usage" "$RESET" "sudo bash scripts/cliui.sh [command] [options]"
 
-Usage: sudo bash scripts/cliui.sh [command] [options]
+  help_section "COMMANDS"
+  help_row "(none)" "Open the interactive menu"
+  help_row "install" "Install Docker, create .env, build and start"
+  help_row "uninstall" "Stop and remove containers (--purge: also volumes, images, .env)"
+  help_row "run" "Start the panel"
+  help_row "stop" "Stop the panel"
+  help_row "restart" "Recreate containers with the current .env"
+  help_row "status" "Show container and health status"
+  help_row "logs" "Follow container logs (--no-follow to print once)"
+  help_row "cf-setup" "Run scripts/cf-setup.mjs (D1 + Worker + Routing)"
+  help_row "update" "git pull, rebuild, and restart"
+  help_row "help" "Show this help"
 
-Commands:
-  (none)          Open the interactive menu
-  install         Install Docker, create .env, build and start
-  uninstall       Stop and remove containers (--purge: also volumes, images, .env)
-  run             Start the panel
-  stop            Stop the panel
-  restart         Recreate containers with the current .env
-  status          Show container and health status
-  logs            Follow container logs (--no-follow to print once)
-  cf-setup        Run scripts/cf-setup.mjs (D1 + Worker + Routing)
-  update          git pull, rebuild, and restart
-  help            Show this help
+  help_section "OPTIONS"
+  help_row "--domain <name>" "Domain for Caddy/HTTPS (install)"
+  help_row "--yes, -y" "Non-interactive, answer yes"
+  help_row "--purge" "Also remove data volumes, images, and .env (uninstall)"
+  help_row "--no-edit" "Do not open the .env editor (install)"
+  help_row "--no-follow" "Print logs once instead of following"
 
-Options:
-  --domain <name> Domain for Caddy/HTTPS (install)
-  --yes, -y       Non-interactive, answer yes
-  --purge         Also remove data volumes, images, and .env (uninstall)
-  --no-edit       Do not open the .env editor (install)
-  --no-follow     Print logs once instead of following
-
-Examples:
-  sudo bash scripts/cliui.sh install --domain mail.example.com
-  sudo bash scripts/cliui.sh uninstall --purge --yes
-  sudo bash scripts/cliui.sh logs --no-follow
-EOF
+  help_section "EXAMPLES"
+  printf '  %s%s%s sudo bash scripts/cliui.sh install --domain mail.example.com\n' "$DIM" "$SYM_ARROW" "$RESET"
+  printf '  %s%s%s sudo bash scripts/cliui.sh uninstall --purge --yes\n' "$DIM" "$SYM_ARROW" "$RESET"
+  printf '  %s%s%s sudo bash scripts/cliui.sh logs --no-follow\n' "$DIM" "$SYM_ARROW" "$RESET"
+  printf '\n'
 }
 
 parse_flags() {
@@ -558,23 +696,30 @@ parse_flags() {
   done
 }
 
+menu_group() { printf '\n  %s%s%s\n' "${BOLD}${GREY}" "$1" "$RESET"; }
+menu_row() { printf '    %s%2s%s  %s\n' "${BOLD}${ORANGE}" "$1" "$RESET" "$2"; }
+
 main_menu() {
   local choice
   while true; do
     clear 2>/dev/null || true
     banner
-    printf '  %2s) %s\n' 1 "Install / setup"
-    printf '  %2s) %s\n' 2 "Run (start)"
-    printf '  %2s) %s\n' 3 "Stop"
-    printf '  %2s) %s\n' 4 "Restart"
-    printf '  %2s) %s\n' 5 "Status"
-    printf '  %2s) %s\n' 6 "Logs (follow)"
-    printf '  %2s) %s\n' 7 "Cloudflare setup (D1 + Worker + Routing)"
-    printf '  %2s) %s\n' 8 "Update (git pull + rebuild)"
-    printf '  %2s) %s\n' 9 "Uninstall"
-    printf '  %2s) %s\n' 0 "Exit"
-    hr
-    if ! read -r -p "Select an option: " choice; then
+    menu_group "SETUP"
+    menu_row 1 "Install / setup"
+    menu_row 7 "Cloudflare setup (D1 + Worker + Routing)"
+    menu_group "OPERATIONS"
+    menu_row 2 "Run (start)"
+    menu_row 3 "Stop"
+    menu_row 4 "Restart"
+    menu_row 5 "Status"
+    menu_row 6 "Logs (follow)"
+    menu_group "MAINTENANCE"
+    menu_row 8 "Update (git pull + rebuild)"
+    menu_row 9 "Uninstall"
+    menu_row 0 "Exit"
+    printf '\n'
+    rule
+    if ! read -r -p "$(printf '%s%s%s Select an option: ' "${BOLD}${CYAN}" "$SYM_ARROW" "$RESET")" choice; then
       printf '\n'
       return 0
     fi
