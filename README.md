@@ -178,6 +178,46 @@ sudo chmod 600 .env
 </details>
 
 <details>
+<summary><strong>VPS CLI (scripts/cliui.sh)</strong></summary>
+
+`scripts/cliui.sh` is the single entry point for Ubuntu/Debian VPS operations. It wraps
+Docker Compose and Cloudflare provisioning, so routine maintenance does not require raw
+compose commands.
+
+```bash
+sudo bash scripts/cliui.sh              # interactive menu
+sudo bash scripts/cliui.sh install      # Docker + .env + build + start
+sudo bash scripts/cliui.sh run
+sudo bash scripts/cliui.sh stop
+sudo bash scripts/cliui.sh restart
+sudo bash scripts/cliui.sh status
+sudo bash scripts/cliui.sh logs
+sudo bash scripts/cliui.sh cf-setup
+sudo bash scripts/cliui.sh update
+sudo bash scripts/cliui.sh uninstall
+sudo bash scripts/cliui.sh uninstall --purge
+```
+
+| Command | Description |
+|---------|-------------|
+| `install` | Installs Docker, Compose, and git; creates `.env`; prompts for the domain; generates `APP_PASSWORD` when it is still the placeholder; builds and starts the stack; waits for health. |
+| `run` | Starts the existing stack and prints the panel URL. |
+| `stop` | Stops the containers while keeping data and `.env`. |
+| `restart` | Recreates the containers from the current `.env` and waits for health. |
+| `status` | Shows container state and probes `http://127.0.0.1:3000/healthz` inside the panel. |
+| `logs` | Follows logs; use `--no-follow` to print once. |
+| `cf-setup` | Runs `scripts/cf-setup.mjs` for D1, Worker, and Email Routing. |
+| `update` | Runs `git pull`, rebuilds, and restarts. |
+| `uninstall` | Removes the containers; `--purge` also removes volumes, local images, and `.env` after confirmation. |
+
+Options: `--domain <name>` (install), `--yes`/`-y` (non-interactive), `--no-edit`
+(do not open the `.env` editor), `--purge` (uninstall), and `--no-follow` (logs).
+
+Shortcut wrappers call the same script: `scripts/install_vps.sh`, `scripts/run_vps.sh`,
+`scripts/stop_vps.sh`, and `scripts/uninstall_vps.sh`.
+</details>
+
+<details>
 <summary><strong>Dokploy (docker-compose.dokploy.yml)</strong></summary>
 
 Dokploy builds the repository and routes traffic through its own Traefik instance, so this
