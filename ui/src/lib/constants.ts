@@ -1,3 +1,5 @@
+export const APP_VERSION = "2.0.0"
+
 export type AccentPreset = {
   id: string
   name: string

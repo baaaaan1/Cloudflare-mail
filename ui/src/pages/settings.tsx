@@ -45,7 +45,7 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useWorkspace } from "@/hooks/use-workspace"
 import { apiClient } from "@/lib/api"
-import { ACCENT_PRESETS } from "@/lib/constants"
+import { ACCENT_PRESETS, APP_VERSION } from "@/lib/constants"
 import { copyText } from "@/lib/format"
 import { queryKeys, STORAGE_KEYS } from "@/lib/query-keys"
 import type { ConfigPayload, Diagnostics } from "@/lib/types"
@@ -766,7 +766,7 @@ export function SettingsPage() {
                 </p>
               </div>
               <Badge variant="secondary" className="ml-auto">
-                v1.1.0
+                v{APP_VERSION}
               </Badge>
             </div>
             <div className="mt-4 grid gap-3 text-[11px] sm:grid-cols-3">

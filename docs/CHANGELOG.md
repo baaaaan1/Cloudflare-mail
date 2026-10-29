@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-10-29
 
 ### Changed
 
@@ -28,8 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- Better Auth integration in favor of `lib/auth.js` (leftover package entries are
-  scheduled for removal).
+- Better Auth integration in favor of `lib/auth.js`.
 - TOTP/2FA and MongoDB credential storage. `PASSWORD_HASH`, `PASSWORD_SALT`, and
   `POST /api/setup-password` are no longer used.
 - Starfield background and glassmorphism styling from the legacy UI.
@@ -153,5 +152,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 2.0.0 | 2026-10-29 | React workspace UI, password auth, scoped API keys, Cloudflare provisioning, hardened deployment |
 | 1.1.0 | 2026-08-25 | Login/session hardening, CSRF, brute-force lockout, API token auth, Dokploy deploy |
 | 1.0.0 | 2025-07-24 | Initial release |

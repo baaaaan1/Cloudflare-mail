@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: ISC" src="https://img.shields.io/badge/license-ISC-blue.svg" /></a>
+  <a href="https://github.com/baaaaan1/Cloudflare-mail/releases"><img alt="Version 2.0.0" src="https://img.shields.io/badge/version-2.0.0-blue.svg" /></a>
   <a href="https://nodejs.org/"><img alt="Node.js 22+" src="https://img.shields.io/badge/node-22%2B-3c873a.svg" /></a>
   <a href="https://www.docker.com/"><img alt="Docker ready" src="https://img.shields.io/badge/docker-ready-2496ed.svg" /></a>
   <a href="https://developers.cloudflare.com/email-routing/"><img alt="Cloudflare Email Routing" src="https://img.shields.io/badge/cloudflare-email%20routing-f38020.svg" /></a>

@@ -14,6 +14,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { useKeyboardShortcut } from "@/hooks/use-keyboard-shortcut"
+import { APP_VERSION } from "@/lib/constants"
 import { AddressesPage } from "@/pages/addresses"
 import { ApiDocsPage } from "@/pages/api-docs"
 import { DestinationsPage } from "@/pages/destinations"
@@ -106,7 +107,7 @@ export function AppShell() {
           </main>
 
           <footer className="hidden items-center justify-between px-8 pb-5 text-[10px] text-muted-foreground lg:flex">
-            <span>Cloudflare Email Panel · self-hosted</span>
+            <span>Cloudflare Email Panel · v{APP_VERSION} · self-hosted</span>
             <span className="inline-flex items-center gap-1">
               <Command className="size-3" />
               K to jump anywhere

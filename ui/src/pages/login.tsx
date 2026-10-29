@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { apiClient } from "@/lib/api"
+import { APP_VERSION } from "@/lib/constants"
 import { navigate } from "@/lib/router"
 import { queryKeys } from "@/lib/query-keys"
 import { loadTurnstile } from "@/lib/turnstile"
@@ -375,7 +376,7 @@ export function LoginPage({ authStatus }: LoginPageProps) {
           </div>
 
           <p className="mt-5 text-center text-[10px] text-muted-foreground">
-            Cloudflare Email Panel · Self-hosted · v1.1.0
+            Cloudflare Email Panel · Self-hosted · v{APP_VERSION}
           </p>
         </motion.div>
       </div>
