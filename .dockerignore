@@ -1,10 +1,49 @@
+# Dependencies (reinstalled in the image)
 node_modules
+**/node_modules
+
+# Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Version control
 .git
 .gitignore
+.gitattributes
 .DS_Store
+
+# Secrets and environment files
 .env
 .env.*
+.register-request.json
+
+# Cloudflare Worker local config/cache
 worker/wrangler.toml
+worker/.wrangler
+**/.wrangler
+
+# Runtime data (persisted via volumes)
+data
+data-test
+caddy_data
+caddy_config
+
+# Local tooling, docs, and build output
+.agents
+.vscode
+.kilo
+docs
+screenshots
+README.md
+LICENSE
+skills-lock.json
+ui/dist
+ui/README.md
+scripts/start-tunnel.bat
+
+# Container definitions (not needed inside the image)
+Dockerfile
+.dockerignore
+docker-compose*.yml
+Caddyfile

@@ -1,432 +1,579 @@
-# Cloudflare Email Panel
+<h1 align="center">Cloudflare Email Panel</h1>
 
-[![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org/)
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://www.docker.com/)
-[![Cloudflare](https://img.shields.io/badge/Cloudflare-Required-orange.svg)](https://www.cloudflare.com/)
+<p align="center">
+  Self-hosted control plane for Cloudflare Email Routing, catch-all delivery, and a D1-backed inbox.
+  <br />
+  One password-protected panel, a production-ready Docker stack, and a REST API for automation.
+</p>
 
-Self-hosted panel to manage Cloudflare Email Routing, destinations, rules, and inbox (via D1). Production uses Docker, Caddy, and automatic HTTPS.
+<p align="center">
+  <a href="LICENSE"><img alt="License: ISC" src="https://img.shields.io/badge/license-ISC-blue.svg" /></a>
+  <a href="https://github.com/baaaaan1/Cloudflare-mail/releases"><img alt="Version 2.0.0" src="https://img.shields.io/badge/version-2.0.0-blue.svg" /></a>
+  <a href="https://nodejs.org/"><img alt="Node.js 22+" src="https://img.shields.io/badge/node-22%2B-3c873a.svg" /></a>
+  <a href="https://www.docker.com/"><img alt="Docker ready" src="https://img.shields.io/badge/docker-ready-2496ed.svg" /></a>
+  <a href="https://developers.cloudflare.com/email-routing/"><img alt="Cloudflare Email Routing" src="https://img.shields.io/badge/cloudflare-email%20routing-f38020.svg" /></a>
+  <a href="ui/package.json"><img alt="React 19 + Vite" src="https://img.shields.io/badge/react-19%20%2B%20vite-61dafb.svg" /></a>
+</p>
 
-## Screenshot
+<p align="center">
+  <img src="docs/assets/panel-login.png" alt="Cloudflare Email Panel login screen" width="900" />
+</p>
 
-![Cloudflare Email Panel](screenshots/cfmail.jpg)
+## Table of Contents
 
-## Features
+- [Highlights](#highlights)
+- [Architecture](#architecture)
+- [Quick start (Docker)](#quick-start-docker)
+- [Deployment](#deployment)
+- [Configuration](#configuration)
+- [Cloudflare setup](#cloudflare-setup)
+- [Using the panel](#using-the-panel)
+- [API reference](#api-reference)
+- [Security](#security)
+- [Development](#development)
+- [Operations and troubleshooting](#operations-and-troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
 
-- **Email Routing Management** - Create, update, and delete forwarding rules
-- **Destinations** - Manage email destinations (forwarding addresses)
-- **Inbox System** - Store incoming emails using Cloudflare D1 + Worker
-- **Catch-All Rules** - Configure catch-all email routing
-- **Worker Integration** - Route emails to Cloudflare Workers
-- **Password Protection** - Secure your panel with password authentication
-- **Two-Factor (TOTP)** - Optional 2FA using authenticator apps
-- **Diagnostics** - Check Cloudflare API connectivity and permissions
-- **Dark Mode** - Beautiful dark theme with responsive design
-- **Security First** - CSP, HSTS, rate limiting, and more
+## Highlights
+
+| Area | What you get |
+|------|--------------|
+| Email Routing | Create, edit, enable, disable, and delete routing rules across every zone in the account. |
+| Destinations | Add and remove verified forwarding addresses. |
+| Catch-all | Route unmatched mail to a Worker, a destination, or drop it entirely. |
+| Inbox | A Cloudflare Worker stores parsed mail in D1; the panel reads, searches, and deletes it. |
+| Disposable addresses | Generate a mailbox address from any active zone in one click; records expire after 7 days. |
+| API access | Scoped API keys (`cfm_...`) with fine-grained permissions for scripts and integrations. |
+| Operations | Overview dashboard, connectivity diagnostics, health endpoints, audit logs, and theme presets. |
+| Security | Password sessions, rate limiting and lockout, optional Turnstile, strict headers, non-root panel, read-only containers. |
+
+> The React/Vite SPA in `ui/` is the primary interface. When `ui/dist` is absent, the server
+> falls back to the legacy vanilla-JS UI in `public/`.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Your VPS                               │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────┐     ┌─────────────────────────────────────┐   │
-│  │  Caddy  │────▶│        Cloudflare Email Panel        │   │
-│  │ (HTTPS) │     │            (Node.js)                 │   │
-│  └─────────┘     └─────────────────────────────────────┘   │
-│   :80, :443                    :3000                        │
-└─────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Cloudflare                                 │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │Email Routing │  │   Workers   │  │    D1 Database      │ │
-│  │   (Rules)   │  │  (Inbox)    │  │   (Email Storage)   │ │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  U["Browser"] -->|"HTTPS"| E["Caddy (VPS)<br/>or Dokploy Traefik"]
+  E -->|":3000"| P["Express panel<br/>server.js"]
+  P -->|"REST"| CF["Cloudflare API"]
+  CF --> R["Email Routing"]
+  CF --> W["inbox-worker"]
+  W -->|"INSERT"| D1[("D1 database")]
+  P -->|"SQL"| D1
+  P --> S[("DATA_DIR<br/>session secret<br/>API-key hashes")]
 ```
 
-## Prerequisites
+<details>
+<summary><strong>Inbound mail flow</strong></summary>
 
-- **VPS**: Ubuntu or Debian with root access
-- **Cloudflare Account**: With Email Routing enabled
-- **Domain**: Added to Cloudflare with DNS pointing to your VPS
-- **Firewall**: Ports 80 and 443 open
-- **SSL/TLS Mode**: Full (strict) in Cloudflare
+```mermaid
+sequenceDiagram
+  participant Sender
+  participant Routing as Cloudflare Email Routing
+  participant Worker as inbox-worker
+  participant D1 as D1 database
+  participant Panel as Email Panel
 
-## Quick Start (Docker)
+  Sender->>Routing: SMTP to any address on the zone
+  Routing->>Worker: catch-all action "worker"
+  Worker->>Worker: parse MIME with postal-mime
+  Worker->>D1: INSERT sender, recipient, subject, text, html
+  Panel->>D1: SELECT inbox + summary
+  Panel-->>Sender: rendered mailbox in the browser
+```
 
-### 1. Clone the repository
+The Worker never forwards mail; it stores it. To keep forwarding instead, skip the routing
+stage below or create explicit forwarding rules from the panel.
+</details>
+
+### Stack
+
+| Layer | Technology |
+|-------|------------|
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS v4, shadcn-style components, TanStack Query |
+| Backend | Node.js 22, Express 4, Axios |
+| Edge | Cloudflare Workers, Email Routing, D1 |
+| Auth | Password session cookie (HMAC-SHA256) plus scoped API keys |
+| Deployment | Docker, Docker Compose, Caddy or Dokploy/Traefik |
+
+## Quick start (Docker)
+
+### Prerequisites
+
+- A Linux VPS (Ubuntu/Debian recommended) with Docker Engine and Docker Compose v2
+- A Cloudflare account with Email Routing enabled for at least one zone
+- A domain pointed at the VPS, with ports 80 and 443 reachable
+- Cloudflare SSL/TLS mode set to **Full (strict)**
+
+### 1. Clone and configure
 
 ```bash
 git clone https://github.com/baaaaan1/Cloudflare-mail.git
 cd Cloudflare-mail
+cp .env.example .env
 ```
 
-### 2. Run the installer
-
-```bash
-sudo bash scripts/install_vps.sh
-```
-
-The installer will:
-- Install Docker Engine + Compose (if not present)
-- Create `.env` from template
-- Prompt for your domain
-- Open `.env` for editing
-- Build and start the containers
-
-### 3. Configure credentials
-
-Edit `.env` with your Cloudflare credentials:
+Edit `.env` and set at minimum:
 
 ```env
-PORT=3000
-CADDY_DOMAIN=your-domain.com
+APP_PASSWORD=use-a-long-random-password
+CADDY_DOMAIN=mail.example.com
 CLOUDFLARE_API_TOKEN=your_api_token
 CLOUDFLARE_ACCOUNT_ID=your_account_id
-CLOUDFLARE_D1_DATABASE_ID=your_d1_database_id
-PASSWORD_HASH=
-PASSWORD_SALT=
+CLOUDFLARE_D1_DATABASE_ID=your_d1_database_id   # optional, enables the inbox
 ```
 
-### 4. Set up password
-
-1. Open your panel at `https://your-domain.com`
-2. You'll see the setup screen
-3. Enter your desired password (minimum 8 characters)
-4. The password hash will be saved to `.env`
-
-Alternatively, generate the hash outside the panel:
+### 2. Start the stack
 
 ```bash
-node scripts/generate-password.js --password "your-secret"
-# or interactive:
-node scripts/generate-password.js
+docker compose up -d --build
 ```
 
-Copy the printed `PASSWORD_SALT=` and `PASSWORD_HASH=` into `.env`.
+The image builds the SPA automatically. Caddy obtains a TLS certificate and proxies to the
+panel on the internal port `3000`.
 
-### 5. Access your panel
+### 3. Sign in
 
-```
-https://your-domain.com
-```
+Open `https://mail.example.com` and enter `APP_PASSWORD`. There is no sign-up: access is a
+single password plus optional scoped API keys.
 
-### Non-root container & `.env` permissions
+> **VPS installer:** `sudo bash scripts/install_vps.sh` (or `scripts/cliui.sh install`) automates
+> Docker installation, `.env` creation, password generation, domain prompts, and startup.
+> For scripted installs use `sudo bash scripts/cliui.sh install --domain mail.example.com --yes`.
 
-The panel container runs as a **non-root** user (UID 1000). When you bind-mount
-`.env` from the host, it must be writable by that UID so the Settings/setup-password
-UI can save changes. The `install_vps.sh` script handles this automatically; for a
-manual setup run:
+## Deployment
+
+<details>
+<summary><strong>VPS with Caddy (docker-compose.yml)</strong></summary>
+
+The default compose file runs two services:
+
+| Service | Purpose |
+|---------|---------|
+| `panel` | Node.js app on internal port `3000`, read-only root filesystem, all capabilities dropped |
+| `caddy` | TLS termination and reverse proxy, ports `80` and `443` |
 
 ```bash
-chown 1000:1000 .env
-chmod 600 .env
+docker compose up -d --build
+docker compose ps
+docker compose logs -f panel
 ```
 
-## Manual Installation (without Docker)
+Volumes:
 
-### 1. Install Node.js 22+
+- `auth_data` stores `DATA_DIR` (session secret and hashed API keys).
+- `caddy_data` and `caddy_config` persist certificates and Caddy state.
+- A writable `.env` bind mount lets the Settings page update Cloudflare credentials.
+
+If you manage `.env` manually, make it writable by container UID 1000 so the Settings page can
+save changes:
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs
+sudo chown 1000:1000 .env
+sudo chmod 600 .env
 ```
+</details>
 
-### 2. Clone and install dependencies
+<details>
+<summary><strong>Dokploy (docker-compose.dokploy.yml)</strong></summary>
+
+Dokploy builds the repository and routes traffic through its own Traefik instance, so this
+compose file runs only the panel and exposes no host ports.
+
+1. Create a **Docker Compose** service in Dokploy with source **GitHub** and this repository.
+2. Set the compose file path to `docker-compose.dokploy.yml`.
+3. In **Environment**, add `APP_PASSWORD`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and
+   optionally `CLOUDFLARE_D1_DATABASE_ID`.
+4. In **Domains**, add your domain; Dokploy routes to the internal port and issues TLS.
+
+`PORT` and `DATA_DIR` are fixed in the compose file to match the healthcheck and the
+`auth_data` volume. The container root filesystem is read-only, so configure environment
+variables in Dokploy rather than through the panel's Settings page.
+</details>
+
+<details>
+<summary><strong>Manual installation without Docker</strong></summary>
 
 ```bash
 git clone https://github.com/baaaaan1/Cloudflare-mail.git
 cd Cloudflare-mail
+
 npm ci
-```
+npm --prefix ui ci
+npm run build        # optional: builds the SPA into ui/dist
 
-### 3. Configure environment
-
-```bash
 cp .env.example .env
-# Edit .env with your credentials
-```
-
-### 4. Start the server
-
-```bash
+# edit .env
 npm start
 ```
 
-The panel will be available at `http://localhost:3000`.
+The panel listens on `http://localhost:3000`. Without a `ui/dist` build, the legacy `public/`
+UI is served instead. For production, put Caddy, Nginx, or another TLS proxy in front of the
+app and set `DATA_DIR` to a persistent path.
+</details>
 
-## Deploy with Dokploy (self-hosted)
+## Configuration
 
-Dokploy builds directly from GitHub using Docker Compose. A dedicated compose file
-is included at [`docker-compose.dokploy.yml`](docker-compose.dokploy.yml) — it runs
-only the panel and lets Dokploy's built-in Traefik proxy handle TLS + domains.
+All runtime settings come from environment variables. Copy [`.env.example`](.env.example) for a
+fully commented template.
 
-1. In Dokploy, create a **Docker Compose** service with source **GitHub** → this repo.
-2. In **General**, set the compose file path to `docker-compose.dokploy.yml`.
-3. In **Environment**, add the required variables (set them in the UI, not in the panel):
+<details>
+<summary><strong>Environment variable reference</strong></summary>
 
-   ```env
-   PORT=3000
-   CLOUDFLARE_API_TOKEN=your_api_token
-   CLOUDFLARE_ACCOUNT_ID=your_account_id
-   CLOUDFLARE_D1_DATABASE_ID=your_d1_database_id
-   PASSWORD=your-login-password
-   ADMIN_API_TOKEN=optional_script_token
-   TOTP_SECRET=optional_totp_base32_secret
-   ```
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PORT` | No | `3000` | HTTP port inside the container or host. |
+| `APP_PASSWORD` | **Yes** | — | Panel login password. Falls back to legacy `ADMIN_PASSWORD`. |
+| `ADMIN_PASSWORD` | No | — | Legacy fallback for `APP_PASSWORD`. |
+| `AUTH_SECRET` | No | generated | HMAC key for session cookies. If omitted, a secret is generated once in `DATA_DIR/auth-secret.txt`. |
+| `DATA_DIR` | No | `/app/data` in Docker; `./data` otherwise | Persistent directory for the session secret and `api-keys.json`. |
+| `CADDY_DOMAIN` | Docker/Caddy | `mail.example.com` | Hostname Caddy serves and obtains a certificate for. Example fallback only. |
+| `CLOUDFLARE_API_TOKEN` | **Yes** | — | API token with the permissions listed below. |
+| `CLOUDFLARE_ACCOUNT_ID` | **Yes** | — | Cloudflare account ID from the dashboard sidebar. |
+| `CLOUDFLARE_D1_DATABASE_ID` | Inbox | — | D1 database ID. Without it, inbox features are disabled. |
+| `TURNSTILE_ENABLED` | No | `false` | Enables Cloudflare Turnstile on the login form. |
+| `TURNSTILE_SITE_KEY` | With Turnstile | — | Public Turnstile widget key. |
+| `TURNSTILE_SECRET_KEY` | With Turnstile | — | Secret key used for server-side verification. |
+| `EMAIL_WORKER_NAME` | No | `inbox-worker` | Worker targeted by `scripts/cf-setup.mjs` and catch-all routing. |
+| `EMAIL_DB_NAME` | No | `email_db` | D1 database name created or reused by `scripts/cf-setup.mjs`. |
+</details>
 
-   `PASSWORD` is your plain login password — the server auto-generates
-   `PASSWORD_SALT`/`PASSWORD_HASH` from it at startup (a fresh random salt every
-   boot). Prefer pre-computed values? Set `PASSWORD_HASH` + `PASSWORD_SALT`
-   instead, generated with:
+<details>
+<summary><strong>Cloudflare API token permissions</strong></summary>
 
-   ```bash
-   node scripts/generate-password.js --password "your-secret"
-   ```
+Create a token at <https://dash.cloudflare.com/profile/api-tokens> with:
 
-   Prefer TOTP-only login? Skip `PASSWORD` and set `TOTP_SECRET` instead.
-   Generate it once with:
+| Scope | Permission | Level | Used for |
+|-------|------------|-------|----------|
+| Account | D1 | Edit | Create the database, apply the schema, query the inbox. |
+| Account | Workers Scripts | Edit | Deploy and inspect `inbox-worker`. |
+| Zone | Email Routing | Edit | Rules, catch-all, destinations. |
+| Zone | Zone | Read | Discover zones in the account. |
 
-   ```bash
-   node scripts/generate-totp-secret.js
-   ```
+Select **All zones** under Zone Resources if you want one token to manage every domain.
+</details>
 
-4. In **Domains**, add your domain. Dokploy routes traffic to the panel (internal
-   port 3000) and issues the TLS certificate automatically.
+<details>
+<summary><strong>Runtime behavior worth knowing</strong></summary>
 
-> **Note:** Because the container runs as non-root (UID 1000) and Dokploy regenerates
-> `.env` on every deploy, do **not** rely on the panel's own "Set password"/"Save
-> Settings" screens to write `.env`. Set all values in the Dokploy **Environment**
-> tab instead.
+- The panel trusts one reverse-proxy hop (`trust proxy`), which matches Caddy and Dokploy.
+- API request bodies are limited to 200 KB by Express and 1 MB by Caddy.
+- Session cookies are signed and stateless, valid for 7 days, `HttpOnly`, `SameSite=Lax`, and
+  `Secure` when the request arrives over HTTPS.
+- Settings saved in the UI are written to `/app/.env`. On the VPS compose stack that file is
+  bind-mounted, so changes persist; in Dokploy the root filesystem is read-only and environment
+  variables must be set in the Dokploy UI.
+- The container drops all Linux capabilities, runs as UID 1000, and uses a read-only root
+  filesystem with a small `tmpfs` at `/tmp`.
+</details>
 
-## Configuration Reference
+## Cloudflare setup
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `PORT` | No | Server port (default: 3000) |
-| `CADDY_DOMAIN` | Yes | Your domain (e.g., `mail.example.com`) |
-| `CLOUDFLARE_API_TOKEN` | Yes | Cloudflare API token with required permissions |
-| `CLOUDFLARE_ACCOUNT_ID` | Yes | Your Cloudflare account ID |
-| `CLOUDFLARE_D1_DATABASE_ID` | No | D1 database ID (required for inbox feature) |
-| `PASSWORD_HASH` | No | Password hash (scrypt, hex). Optional if `PASSWORD` is set |
-| `PASSWORD_SALT` | No | Password salt (hex). Optional if `PASSWORD` is set |
-| `PASSWORD` | No* | Plain login password — `PASSWORD_SALT`/`PASSWORD_HASH` are generated automatically at startup. Easiest for Dokploy/Compose deploys |
-| `ADMIN_API_TOKEN` | No | Optional token for scripted/remote API access (`Authorization: Bearer <token>` or `X-API-Key`) |
-| `TOTP_SECRET` | No | Base32 TOTP secret for 2FA login (generate with `scripts/generate-totp-secret.js`) |
+<details>
+<summary><strong>One-command provisioning (D1 + Worker + routing)</strong></summary>
 
-\* One of `PASSWORD`, `PASSWORD_HASH` + `PASSWORD_SALT`, or `TOTP_SECRET` is required to protect the panel. You can combine password and TOTP for two-factor login.
+```bash
+npm run cf:setup
+```
 
-### Cloudflare API Token Permissions
+The script reads `.env` and performs three stages:
 
-Create a custom API token with these permissions:
+1. **D1** — creates or reuses the database (`EMAIL_DB_NAME`), applies `worker/schema.sql`, and
+   writes `CLOUDFLARE_D1_DATABASE_ID` back to `.env`.
+2. **Worker** — generates `worker/wrangler.toml` and deploys `EMAIL_WORKER_NAME` with the `DB`
+   binding.
+3. **Routing** — deletes every literal (non-catch-all) Email Routing rule in every selected
+   zone and points the catch-all rule at the Worker.
 
-- **Zone** → Email Routing → Edit
-- **Zone** → Zone → Read
-- **Account** → Workers Scripts → Edit (if using Workers)
-- **Account** → D1 → Edit (if using Inbox)
+> **Destructive routing step:** stage 3 removes existing literal rules. Use `--dry-run` first
+> and restrict the scope with `--zone`.
 
-## API Reference
+```bash
+node scripts/cf-setup.mjs routing --dry-run
+node scripts/cf-setup.mjs routing --zone example.com
+node scripts/cf-setup.mjs all --worker inbox-worker --db-name email_db
+node scripts/cf-setup.mjs routing --purge-destinations
+```
 
-### Authentication
+Run individual stages with `npm run cf:d1`, `npm run cf:worker`, or `npm run cf:routing`.
+</details>
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/auth-status` | GET | Check authentication status |
-| `/api/login` | POST | Login with password |
-| `/api/logout` | POST | Logout |
-| `/api/setup-password` | POST | Initial password setup |
-
-**API token auth (optional):** set `ADMIN_API_TOKEN` in `.env`, then call any `/api/*`
-endpoint (except login/logout/auth-status) with `Authorization: Bearer <token>` or
-`X-API-Key: <token>` to authenticate without a cookie session. Mutating requests
-authenticated via cookies require a matching `X-CSRF-Token` header, which is
-returned by `/api/login` and `/api/session`.
-
-### Destinations
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/destinations` | GET | List all destinations |
-| `/api/destinations` | POST | Create new destination |
-| `/api/destinations/:id` | DELETE | Delete destination |
-
-### Rules
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/rules` | GET | List rules (requires `zoneId`) |
-| `/api/rules` | POST | Create new rule |
-| `/api/rules/:id` | PUT | Update rule |
-| `/api/rules/:id` | DELETE | Delete rule |
-
-### Inbox
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/inbox/summary` | GET | Get inbox summary by recipient |
-| `/api/inbox` | GET | List emails (supports `limit`, `offset`, `recipient`) |
-| `/api/inbox/:id` | GET | Get email details |
-| `/api/inbox/:id` | DELETE | Delete email |
-| `/api/inbox/init` | POST | Initialize D1 database |
-
-### Configuration
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/config` | GET | Get current config |
-| `/api/config` | POST | Update config |
-| `/api/diagnostics` | GET | Check API connectivity |
-
-### Health
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/healthz` | GET | Liveness check |
-| `/health` | GET | Health check with API verification |
-
-## Worker Setup (Inbox)
-
-The Worker stores incoming emails in D1 for viewing in the panel.
-
-### 1. Create D1 Database
+<details>
+<summary><strong>Manual Worker setup</strong></summary>
 
 ```bash
 npx wrangler d1 create email-db
-```
-
-Note the `database_id` and add it to `.env`.
-
-### 2. Configure Worker
-
-```bash
 cp worker/wrangler.toml.example worker/wrangler.toml
-```
-
-Edit `worker/wrangler.toml` and set `database_id`.
-
-### 3. Deploy Worker
-
-```bash
+# set database_id in worker/wrangler.toml
 npm run deploy:worker
 ```
 
-Or from VPS:
+Then, in **Cloudflare Dashboard -> Email Routing**, add a catch-all rule (or a specific rule),
+choose **Send to Worker**, and select `inbox-worker`. The panel's Inbox page reads what the
+Worker writes to D1.
+</details>
+
+## Using the panel
+
+| Page | Purpose |
+|------|---------|
+| **Overview** | Workspace totals, recent activity, routing health, and quick actions. |
+| **Inbox** | Browse messages by mailbox, read HTML or plain text, and delete messages. |
+| **Addresses** | Generate a disposable address on an active domain; the panel creates the routing rule and tracks it for 7 days. |
+| **Routing rules** | Create, edit, enable/disable, and delete rules per zone. |
+| **Destinations** | Add or remove verified forwarding targets. |
+| **API docs** | Endpoint reference plus API-key management with selectable scopes. |
+| **Settings** | Cloudflare credentials, diagnostics, theme, and accent presets. |
+
+Additional conveniences: dark/light themes, six accent presets, a command palette, keyboard
+shortcuts, mobile navigation, and a health indicator in the sidebar.
+
+## API reference
+
+All `/api/*` routes except the auth routes require either a signed session cookie or an API key:
 
 ```bash
-bash scripts/deploy_vps.sh --deploy-worker
+# Session cookie
+curl -c cookies.txt -X POST https://mail.example.com/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"password":"your-password"}'
+
+# API key
+curl -H "Authorization: Bearer cfm_xxxxxxxx" https://mail.example.com/api/destinations
+# or
+curl -H "X-API-Key: cfm_xxxxxxxx" https://mail.example.com/api/destinations
 ```
 
-### 4. Setup Email Routing
+<details>
+<summary><strong>Authentication and session</strong></summary>
 
-In Cloudflare Dashboard → Email Routing:
-1. Add a catch-all rule or specific rule
-2. Set action to "Send to Worker"
-3. Select `inbox-worker`
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/auth/login` | POST | Body `{ "password": "...", "turnstileToken": "..." }`. Returns a session cookie. |
+| `/api/auth/logout` | POST | Clears the session cookie. |
+| `/api/logout` | POST | Compatibility alias for `/api/auth/logout`. |
+| `/api/auth-status` | GET | Returns login state, password availability, and Turnstile configuration. |
+| `/api/session` | GET | Returns `{ ok, role, email }` for the current session. |
+</details>
 
-## Development
+<details>
+<summary><strong>API keys and scopes</strong></summary>
 
-### Local Development
+Keys are created from the panel or `POST /api/keys`, shown once, and stored only as SHA-256
+hashes in `DATA_DIR/api-keys.json` (mode `0600`). Cookie sessions act as admin; API keys are
+restricted to their scopes.
 
-```bash
-cp .env.example .env
-npm ci
-npm run dev
-```
+| Scope | Grants |
+|-------|--------|
+| `rules:read` / `rules:write` | List, create, update, and delete routing rules and catch-all. |
+| `destinations:read` / `destinations:write` | List, add, and remove destinations. |
+| `inbox:read` / `inbox:write` | Read, delete, and initialize inbox data; manage generated addresses. |
+| `domains:read` | List zones and Workers. |
+| `config:read` / `config:write` | Read or update panel configuration and diagnostics. |
+| `keys:read` / `keys:write` | List, create, and revoke API keys. |
+| `*` | Full access. |
 
-The server will start with hot-reload at `http://localhost:3000`.
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/keys` | GET | List keys and available scopes. |
+| `/api/keys` | POST | Create a key with `{ "name": "...", "scopes": ["rules:read"] }`. |
+| `/api/keys/:id` | DELETE | Revoke a key. |
+</details>
 
-### Project Structure
+<details>
+<summary><strong>Email routing and destinations</strong></summary>
 
-```
-├── server.js              # Express API server
-├── public/                # Frontend (vanilla JS)
-│   ├── index.html
-│   ├── main.js
-│   ├── styles.css
-│   └── ...
-├── worker/                # Cloudflare Worker
-│   ├── src/index.js
-│   ├── schema.sql
-│   └── wrangler.toml.example
-├── scripts/
-│   ├── install_vps.sh     # AIO installer
-│   └── deploy_vps.sh      # Deploy script
-├── docker-compose.yml     # Production stack (VPS + Caddy)
-├── docker-compose.dokploy.yml  # Dokploy (self-hosted) deployment
-├── Dockerfile             # Node.js container
-├── Caddyfile              # Reverse proxy config
-└── .env.example           # Environment template
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/domains` | GET | List zones visible to the token. |
+| `/api/workers` | GET | List Workers in the account. |
+| `/api/destinations` | GET | List forwarding destinations. |
+| `/api/destinations` | POST | Body `{ "email": "user@example.com" }`. |
+| `/api/destinations/:id` | DELETE | Remove a destination. |
+| `/api/rules?zoneId=...` | GET | List rules for a zone. |
+| `/api/rules` | POST | Create a rule: `zoneId`, `customEmail`, `destinationId`, `type`. |
+| `/api/rules/:id` | PUT | Update a rule (address, destination, type, enabled). |
+| `/api/rules/:id` | DELETE | Delete a rule; pass `zoneId` in the body or query. |
+| `/api/catch-all` | POST | Body `{ "zoneId", "action": "worker|forward|drop|disabled", "destinationId" }`. |
+</details>
 
-### Available Scripts
+<details>
+<summary><strong>Inbox, addresses, configuration, and health</strong></summary>
 
-```bash
-npm start          # Start production server
-npm run dev        # Start development server with hot-reload
-npm run deploy:worker  # Deploy Cloudflare Worker
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/inbox/summary` | GET | Message counts grouped by recipient. |
+| `/api/inbox?limit=&offset=&recipient=` | GET | Paginated message list; also accepts `recipients`. |
+| `/api/inbox/:id` | GET | Full message details. |
+| `/api/inbox/:id` | DELETE | Delete a message. |
+| `/api/inbox/init` | POST | Apply `worker/schema.sql` to D1. |
+| `/api/addresses` | POST | Record a generated address: `{ "address": "a@example.com" }`. |
+| `/api/addresses/latest` | GET | Most recent generated address, if still within 7 days. |
+| `/api/config` | GET | Current Cloudflare configuration state. |
+| `/api/config` | POST | Update credentials; writes `/app/.env`. |
+| `/api/diagnostics` | GET | Probe token, destinations, rules, domains, and D1. |
+| `/healthz` | GET | Liveness check used by Docker. |
+| `/health` | GET | Lightweight check with destination count and warnings. |
+
+Errors use JSON: `{ "error": "message" }`. Rate-limited logins return `429` with a
+`Retry-After` header.
+</details>
 
 ## Security
 
-- **Password Authentication** - Secure your panel with a password (scrypt, salted, timing-safe compare)
-- **Two-Factor (TOTP)** - Optional 2FA via authenticator apps (Google Authenticator, Aegis, Authy, ...)
-- **API Token Auth** - Optional `ADMIN_API_TOKEN` for scripted/remote access
-- **Rate Limiting** - Protection against brute-force attacks
-- **Login Lockout** - Temporary per-IP lockout after repeated failed logins
-- **CSRF Protection** - Session-bound CSRF token required on mutating requests
-- **Session Hardening** - HttpOnly, SameSite=Strict cookies, hashed session IDs, idle timeout
-- **CSP Headers** - Content Security Policy to prevent XSS
-- **HSTS** - HTTP Strict Transport Security
-- **Secure Cookies** - HttpOnly, SameSite=Strict
-- **Security Headers** - CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, Cross-Origin-Opener-Policy, Cross-Origin-Resource-Policy
-- **Non-root Container** - Panel runs as a non-root user inside Docker (`no-new-privileges`)
-- **No Sensitive Data in Git** - `.env` and credentials are gitignored
+- Password-only authentication with constant-time comparison; no public sign-up and no user
+  database to manage.
+- HMAC-SHA256 session cookies with a 7-day expiry; signing secret persisted in `DATA_DIR`.
+- Login protection: 5 requests per minute per IP, 5 failures trigger a 15-minute lockout that
+  doubles on repeat offences up to 24 hours.
+- Optional Cloudflare Turnstile; the captcha stays disabled unless the flag and both keys are set.
+- API keys are hashed at rest, prefixed `cfm_`, shown once, and limited to explicit scopes.
+- Strict response headers: CSP, HSTS in production, `X-Content-Type-Options`, `X-Frame-Options`,
+  `Referrer-Policy`, `Permissions-Policy`, COOP, and CORP.
+- The panel runs as UID 1000; both compose services use `no-new-privileges`, drop all
+  capabilities (Caddy re-adds only `NET_BIND_SERVICE`), mount a read-only root filesystem, and
+  apply PID limits and log rotation.
+- `.env`, generated secrets, API-key files, and runtime data are excluded from Git and the Docker
+  build context.
 
-### Reporting Vulnerabilities
+Please report vulnerabilities privately as described in [`docs/SECURITY.md`](docs/SECURITY.md).
 
-If you discover a security vulnerability, please report it responsibly:
+## Development
 
-1. **DO NOT** open a public GitHub issue
-2. Email security concerns to: [your-email@example.com]
-3. Allow time for a fix before public disclosure
+<details>
+<summary><strong>Local setup, scripts, and project layout</strong></summary>
+
+### Prerequisites
+
+- Node.js 22 or newer
+- npm
+- A Cloudflare account for end-to-end testing
+
+### Setup
+
+```bash
+npm ci
+npm --prefix ui ci
+cp .env.example .env
+# edit .env
+npm run dev
+```
+
+`npm run dev` starts the Express API on `http://localhost:3000` and Vite on
+`http://localhost:5173`. Vite proxies `/api`, `/health`, and `/healthz` to the API.
+
+### Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm start` | Start the production server. |
+| `npm run dev` | Run API and Vite together with hot reload. |
+| `npm run dev:server` | Run only the API with nodemon. |
+| `npm run dev:ui` | Run only the Vite dev server. |
+| `npm run build` | Build the React SPA into `ui/dist`. |
+| `npm run build:css` | Rebuild `public/styles.css` for the legacy UI. |
+| `npm run deploy:worker` | Deploy `inbox-worker` with Wrangler. |
+| `npm run cf:setup` | Provision D1, Worker, and routing. |
+| `npm run cf:d1` | Provision only the D1 database and schema. |
+| `npm run cf:worker` | Generate Wrangler config and deploy the Worker. |
+| `npm run cf:routing` | Enforce catch-all routing. |
+
+UI checks:
+
+```bash
+cd ui
+npm run typecheck
+npm run lint
+npm run build
+```
+
+### Project structure
+
+```text
+.
+├── server.js                 # Express server, auth, Cloudflare API, static SPA
+├── lib/
+│   ├── auth.js               # Password login, HMAC session cookies
+│   └── apiKeys.js            # API-key hashing, scopes, persistence
+├── ui/                       # React + TypeScript + Vite SPA
+│   ├── src/pages/            # Overview, inbox, addresses, rules, destinations, API docs, settings
+│   └── dist/                 # Build output (generated)
+├── public/                   # Legacy vanilla-JS UI fallback
+├── worker/
+│   ├── src/index.js          # Email Worker: parse MIME, store in D1, cleanup
+│   ├── schema.sql            # D1 tables and indexes
+│   └── wrangler.toml.example
+├── scripts/
+│   ├── cliui.sh              # VPS installer/manager menu
+│   ├── install_vps.sh        # Wrapper: cliui.sh install
+│   ├── uninstall_vps.sh      # Wrapper: cliui.sh uninstall
+│   ├── run_vps.sh            # Wrapper: cliui.sh run
+│   ├── stop_vps.sh           # Wrapper: cliui.sh stop
+│   ├── deploy_vps.sh         # Deploy helper
+│   ├── cf-setup.mjs          # D1, Worker, and routing provisioning
+│   └── start-tunnel.bat      # Local server + tunnel helper
+├── docs/                     # Changelog, contributing, security, assets
+├── Dockerfile                # Multi-stage Node image
+├── docker-compose.yml        # VPS stack with Caddy
+├── docker-compose.dokploy.yml# Dokploy stack (Traefik)
+├── Caddyfile                 # TLS and reverse proxy
+└── .env.example              # Environment template
+```
+
+There is no automated test suite. Before opening a pull request, run the UI checks above and
+exercise the affected API routes locally.
+</details>
+
+## Operations and troubleshooting
+
+<details>
+<summary><strong>Common issues</strong></summary>
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| Login says `APP_PASSWORD not set` | No password configured | Set `APP_PASSWORD` (or `ADMIN_PASSWORD`) in `.env` and restart. |
+| `401 Unauthorized` | Expired cookie or missing key | Sign in again or send `Authorization: Bearer cfm_...`. |
+| `403 Missing required API permission` | Key lacks a scope | Create a key with the needed scope or use a cookie session. |
+| Inbox is empty or disabled | D1 not configured | Set `CLOUDFLARE_D1_DATABASE_ID`, run `npm run cf:d1`, then `POST /api/inbox/init`. |
+| Settings save fails | `.env` not writable by UID 1000, or read-only root filesystem | On VPS, `chown 1000:1000 .env`; on Dokploy, set variables in the UI. |
+| `429 Too Many Requests` | Login rate limit or lockout | Wait for `Retry-After`; lockouts double up to 24 hours. |
+| Caddy cannot issue a certificate | DNS, firewall, or proxy mode | Point DNS at the VPS, open 80/443, use Full (strict) in Cloudflare. |
+| UI changes are missing after pull | SPA not rebuilt | Rebuild with Docker or `npm run build`; hard-refresh the browser. |
+| Cloudflare permission errors | Token scopes incomplete | Run `/api/diagnostics` and add the missing permission. |
+
+### Logs and health
+
+```bash
+docker compose logs -f panel
+docker compose ps
+curl -fsS http://127.0.0.1:3000/healthz
+```
+
+Container logs use JSON file rotation (3 x 10 MB). The panel also writes `[AUDIT]` lines for
+logins and API-key changes.
+</details>
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome. Read [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for the workflow,
+coding standards, and pull-request checklist. Release notes live in
+[`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
-### Development Setup
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+```bash
+git checkout -b feature/your-feature
+# make changes, run checks
+git commit -m "feat: describe the change"
+git push origin feature/your-feature
+```
 
 ## License
 
-This project is licensed under the ISC License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- [Cloudflare](https://www.cloudflare.com/) for Email Routing, Workers, and D1
-- [Caddy](https://caddyserver.com/) for automatic HTTPS
-- [Express.js](https://expressjs.com/) for the web framework
-- [PostalMime](https://github.com/nicktomlin/postal-mime) for email parsing
-
-## Support
-
-- **Documentation**: Read this README
-- **Issues**: [GitHub Issues](https://github.com/baaaaan1/Cloudflare-mail/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/baaaaan1/Cloudflare-mail/discussions)
+Released under the [ISC License](LICENSE).
 
 ---
 
-<<<<<<< Updated upstream
-Made with ☕ by [baaaaan1](https://github.com/baaaaan1)
-=======
-Made with ☕ by [baaaaan1](https://github.com/baaaaan1)
->>>>>>> Stashed changes
+<p align="center">
+  Maintained by <a href="https://github.com/baaaaan1">baaaaan1</a>
+</p>

@@ -1,6 +1,6 @@
 {
   "name": "cf-email-panel",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "Self-hosted panel to manage Cloudflare Email Routing, destinations, rules, and inbox",
   "main": "server.js",
   "repository": {
@@ -25,21 +25,28 @@
   "author": "baaaaan1",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js",
-    "deploy:worker": "cd worker && npx wrangler deploy"
+    "build": "npm --prefix ui run build",
+    "build:ui": "npm --prefix ui run build",
+    "build:css": "tailwindcss -i src/tailwind.css -o public/styles.css --minify",
+    "dev": "concurrently -k -n api,ui -c blue,magenta \"nodemon server.js\" \"npm --prefix ui run dev\"",
+    "dev:server": "nodemon server.js",
+    "dev:ui": "npm --prefix ui run dev",
+    "deploy:worker": "cd worker && npx wrangler deploy",
+    "cf:setup": "node scripts/cf-setup.mjs all",
+    "cf:d1": "node scripts/cf-setup.mjs d1",
+    "cf:worker": "node scripts/cf-setup.mjs worker",
+    "cf:routing": "node scripts/cf-setup.mjs routing"
   },
   "license": "ISC",
-"dependencies": {
+  "dependencies": {
     "axios": "^1.7.2",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "postal-mime": "^2.7.1",
-    "qrcode": "^1.5.3",
-    "speakeasy": "^2.0.0",
-    "telegraf": "^4.16.3"
+    "postal-mime": "^2.7.1"
   },
-"devDependencies": {
+  "devDependencies": {
     "concurrently": "^8.2.2",
-    "nodemon": "^3.1.11"
+    "nodemon": "^3.1.11",
+    "tailwindcss": "^3.4.19"
   }
 }

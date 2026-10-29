@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="id">
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login • Cloudflare Email Panel</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+  <link href="/styles.css" rel="stylesheet">
+ </head>
+ <body class="auth-page">
+  <script src="/theme-init.js"></script>
+
+  <div class="auth-shell">
+   <div class="auth-card">
+    <div class="auth-brand">
+     <span class="auth-brand-icon material-icons">mail</span>
+     <div>
+      <div class="auth-brand-title">Cloudflare Email Panel</div>
+      <div class="auth-brand-subtitle">Email Routing Dashboard</div>
+     </div>
+    </div>
+
+    <div id="loginMode">
+     <h1 class="auth-heading">Login</h1>
+     <p class="auth-hint">Masukkan password untuk mengelola email routing.</p>
+     <div class="auth-notice is-hidden" id="authNotice"></div>
+     <div class="auth-notice is-hidden" id="setupNotice"></div>
+
+     <form id="loginForm" autocomplete="off" novalidate>
+      <div class="form-group">
+       <label class="form-label" for="passwordInput">Password</label>
+       <div class="auth-input-wrap">
+        <input type="password" id="passwordInput" class="form-input"
+               placeholder="Password" required autocomplete="current-password"
+               style="padding-right:44px">
+        <button type="button" id="togglePwd" class="auth-toggle-pwd" tabindex="-1"
+                aria-label="Show/hide password" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--muted,#888);font-size:18px">
+         <span class="material-icons" id="pwdIcon">visibility</span>
+        </button>
+       </div>
+      </div>
+
+      <button type="submit" class="btn btn--primary btn--block" id="loginBtn">Login</button>
+     </form>
+    </div>
+   </div>
+
+   <p class="auth-footer">Cloudflare Email Routing Panel</p>
+  </div>
+
+  <script src="/login.js"></script>
+ </body>
+</html>

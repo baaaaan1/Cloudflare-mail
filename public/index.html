@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cloudflare Email Panel</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <script src="/_sdk/element_sdk.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
@@ -11,80 +12,33 @@
   <script src="/_sdk/data_sdk.js" type="text/javascript"></script>
  </head>
  <body>
-  <canvas id="bgStars" aria-hidden="true"></canvas>
   <script src="/theme-init.js"></script>
-  <button class="floating-app-icon" id="floatingAppIcon" type="button" aria-label="Cloudflare Email Panel">
-   <span class="material-icons">mail</span>
-  </button>
-  <button class="sidebar-handle" id="sidebarHandle" type="button" aria-label="Toggle sidebar">
-   <span class="material-icons" id="sidebarHandleIcon">chevron_left</span>
-  </button>
-  <!-- Login Modal (Password only) -->
-  <div class="modal-overlay login-overlay" id="loginModal">
-   <div class="modal glass-card">
-    <div class="modal-header">
-     <h2 class="modal-title">Login</h2>
-    </div>
-    <div class="modal-body">
-     <div class="auth-notice is-hidden" id="authNotice"></div>
-     <form id="loginForm">
-       <div class="form-group" id="passwordGroup">
-        <label class="form-label" for="passwordInput">Password</label>
-        <input type="password" id="passwordInput" class="form-input" placeholder="Enter your password" autocomplete="current-password" required>
-       </div>
-       <div class="form-group is-hidden" id="totpGroup">
-        <label class="form-label" for="totpInput">Kode 2FA</label>
-        <input type="text" id="totpInput" class="form-input" placeholder="123456" inputmode="numeric" autocomplete="one-time-code">
-       </div>
-      </form>
-    </div>
-    <div class="modal-actions">
-     <button type="submit" form="loginForm" class="btn" id="loginSubmitBtn">Login</button>
-    </div>
-   </div>
-  </div>
 
-  <!-- Setup Password Modal (first time) -->
-  <div class="modal-overlay" id="setupPasswordModal">
-   <div class="modal glass-card">
-    <div class="modal-header">
-     <h2 class="modal-title">Set Password</h2>
-    </div>
-    <div class="modal-body">
-     <div class="auth-notice is-hidden" id="setupNotice"></div>
-     <p class="field-help">Password belum dikonfigurasi. Buat password untuk mengamankan panel.</p>
-     <form id="setupPasswordForm">
-      <div class="form-group">
-       <label class="form-label" for="newPassword">New Password</label>
-       <input type="password" id="newPassword" class="form-input" placeholder="Minimal 8 karakter" minlength="8" required>
-      </div>
-      <div class="form-group">
-       <label class="form-label" for="confirmPassword">Confirm Password</label>
-       <input type="password" id="confirmPassword" class="form-input" placeholder="Ulangi password" minlength="8" required>
-      </div>
-     </form>
-    </div>
-    <div class="modal-actions">
-     <button type="submit" form="setupPasswordForm" class="btn" id="setupPasswordBtn">Set Password</button>
-    </div>
-   </div>
-  </div>
+  <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Buka panel pengaturan" aria-controls="sidebar" aria-expanded="false" title="Buka panel pengaturan">
+   <span class="material-icons icon-default">mail</span>
+   <span class="material-icons icon-hover">menu</span>
+  </button>
 
   <div class="sidebar-overlay" id="sidebarOverlay"></div>
-  <aside class="sidebar" id="sidebar">
+  <aside class="sidebar" id="sidebar" aria-label="Panel pengaturan" aria-hidden="true">
    <div class="sidebar-header">
     <div class="brand">
-     <div class="brand-text">
+     <span class="material-icons">mail</span>
+     <div>
       <div class="brand-title">Cloudflare</div>
       <div class="brand-subtitle">Email Panel</div>
      </div>
     </div>
+    <button class="sidebar-close" id="sidebarClose" type="button" aria-label="Tutup panel pengaturan" title="Tutup panel">
+     <span class="material-icons">close</span>
+    </button>
    </div>
 
+
    <div class="sidebar-content">
-     <section class="sidebar-section">
-      <div class="section-title"><span class="material-icons">settings</span> Settings</div>
-      <form id="settingsForm" class="stack">
+    <section class="sidebar-section">
+     <div class="section-title"><span class="material-icons">settings</span> Settings</div>
+     <form id="settingsForm" class="stack">
       <label class="field">
        <span class="field-label">Account ID</span>
        <div class="input-group">
@@ -141,32 +95,17 @@
      </form>
     </section>
 
-     <section class="sidebar-section">
-      <div class="section-title"><span class="material-icons">phonelink_lock</span> Two-Factor (TOTP)</div>
-      <div class="field-help" id="totpStatus">Checking...</div>
-      <div class="stack">
-        <button type="button" class="btn btn-secondary" id="btn-totp-setup">Generate QR / Secret</button>
-        <div class="stack is-hidden" id="totpEnroll">
-          <img id="totpQr" alt="2FA QR" style="max-width:220px;image-rendering:pixelated;" />
-          <code id="totpSecretText" style="display:block;word-break:break-all;"></code>
-          <input type="text" id="totpConfirmCode" class="form-input" placeholder="Masukkan kode 6 digit dari app" inputmode="numeric">
-          <button type="button" class="btn" id="btn-totp-activate">Activate 2FA</button>
-        </div>
-        <button type="button" class="btn btn-secondary is-hidden" id="btn-totp-disable">Disable 2FA</button>
-      </div>
-     </section>
-
-      <section class="sidebar-section">
-       <div class="section-title"><span class="material-icons">palette</span> Theme</div>
+    <section class="sidebar-section">
+     <div class="section-title"><span class="material-icons">palette</span> Theme</div>
      <div class="theme-presets" id="themePresets">
       <button type="button" class="chip" data-preset="ocean">Ocean</button>
-      <button type="button" class="chip" data-preset="purple">Purple</button>
-      <button type="button" class="chip" data-preset="emerald">Emerald</button>
-      <button type="button" class="chip" data-preset="amber">Amber</button>
+      <button type="button" class="chip" data-preset="sunset">Sunset</button>
+      <button type="button" class="chip" data-preset="meadow">Meadow</button>
+      <button type="button" class="chip" data-preset="coral">Coral</button>
      </div>
      <div class="theme-custom">
-      <input type="color" id="accentPicker" value="#6366f1" aria-label="Pick accent color">
-      <input type="text" id="accentHexDisplay" class="form-input hex-display" readonly value="#6366f1">
+      <input type="color" id="accentPicker" value="#277da1" aria-label="Pick accent color">
+      <input type="text" id="accentHexDisplay" class="form-input hex-display" readonly value="#277da1">
       <button type="button" class="btn btn-secondary" id="accentApply">Apply</button>
      </div>
      <div class="toggle-row">
@@ -178,8 +117,8 @@
      </div>
     </section>
 
-     <section class="sidebar-section">
-      <div class="section-title"><span class="material-icons">monitor_heart</span> Status</div>
+    <section class="sidebar-section">
+     <div class="section-title"><span class="material-icons">monitor_heart</span> Status</div>
      <div class="status-card" id="api-status">
       <div class="status-row">
        <span class="status-dot"></span>
@@ -194,11 +133,11 @@
      </div>
     </section>
 
-     <section class="sidebar-section">
-      <div class="section-title"><span class="material-icons">info</span> About</div>
+    <section class="sidebar-section">
+     <div class="section-title"><span class="material-icons">info</span> About</div>
      <div class="about-card">
       <div class="about-title">Mail Client UI</div>
-      <div class="about-sub">Glassmorphism layout with domain-aware routing.</div>
+      <div class="about-sub">Flat Tailwind design with domain-aware routing.</div>
       <a class="about-link" href="https://github.com/baaaaan1" target="_blank" rel="noopener noreferrer">github.com/baaaaan1</a>
      </div>
     </section>
@@ -216,143 +155,94 @@
     <header class="topbar">
      <div class="topbar-title">
       <div class="title" id="panel-title">Cloudflare Email Panel</div>
-      <div class="subtitle" id="welcome-message">Manage routing and inbox in one place</div>
-     </div>
-     <div class="topbar-actions">
-      <button class="btn" id="btn-add-rule">
-       <span class="material-icons">add_circle_outline</span>
-       Add Rule
-      </button>
+      <div class="subtitle" id="welcome-message">Create an address and read its inbox</div>
      </div>
     </header>
 
     <section class="mail-layout">
-     <div class="pane addresses">
-      <div class="pane-header">
-       <div>
-        <div class="pane-title">Addresses</div>
-        <div class="pane-subtitle">Filter inbox by routing address</div>
+     <section class="create-card ui-card" aria-labelledby="create-heading">
+      <div class="create-header">
+       <h2 class="create-title" id="create-heading">Create your address</h2>
+        <p class="create-subtitle">Pick a name and a domain. Messages are sent to your inbox worker.</p>
+      </div>
+      <form id="createAddressForm" class="create-row" novalidate>
+       <div class="create-field create-field-name">
+        <label class="sr-only" for="createName">Name</label>
+        <div class="create-input-wrap">
+         <input type="text" id="createName" class="ui-input create-input" placeholder="Enter a name" autocomplete="off" required>
+         <button type="button" class="ui-button ui-button-ghost ui-button-icon create-icon-btn" id="btn-random-name" title="Generate random name" aria-label="Generate random name">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+           <path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/>
+           <path d="m18 2 4 4-4 4"/>
+           <path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/>
+           <path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/>
+           <path d="m18 14 4 4-4 4"/>
+          </svg>
+          <span class="sr-only">Generate Random Name</span>
+         </button>
+        </div>
        </div>
-        <select id="addressSort" class="pane-select">
-         <option value="name-asc" selected>Email A–Z</option>
-         <option value="name-desc">Email Z–A</option>
-         <option value="message-newest" data-requires-activity="1">Pesan terbaru</option>
-         <option value="message-oldest" data-requires-activity="1">Pesan terlama</option>
+       <div class="create-field create-field-style">
+        <label class="sr-only" for="nameStyle">Name style</label>
+        <select id="nameStyle" class="ui-select create-select" aria-label="Name style">
+         <option value="us">US</option>
+         <option value="id">ID</option>
         </select>
-      </div>
-      <div class="pane-tools">
-       <span class="material-icons">search</span>
-        <input type="text" id="addressSearch" placeholder="Cari email, domain, tujuan, type">
-      </div>
-      <div class="pane-filter">
-       <span class="material-icons">public</span>
-       <select id="domainFilter" class="pane-select">
-        <option value="">All Domains</option>
-       </select>
-      </div>
-      <div class="pane-body" id="address-list"></div>
-      <div class="pane-empty" id="address-empty">No addresses found. Add a rule to get started.</div>
-     </div>
-
-     <div class="pane inbox">
-      <div class="pane-header">
-       <div>
-        <div class="pane-title">Inbox</div>
-        <div class="pane-subtitle" id="inbox-subtitle">Select an address to load messages</div>
        </div>
-       <button class="btn btn-secondary" id="btn-refresh-inbox">
-        <span class="material-icons">refresh</span>
-        Refresh
-       </button>
+       <div class="create-field create-field-domain">
+        <label class="sr-only" for="createDomain">Domain List</label>
+        <select id="createDomain" class="ui-select create-select" required></select>
+       </div>
+       <button type="submit" class="ui-button ui-button-primary create-submit" id="btn-create-address">Create Address</button>
+       <button type="button" class="ui-button ui-button-outline create-random" id="btn-create-random">Create Random Address</button>
+      </form>
+      <p class="field-error create-error" id="createError" role="alert"></p>
+     </section>
+
+     <section class="viewing-panel ui-card" id="viewingPanel" aria-label="Latest generated address" hidden>
+      <div class="viewing-header">
+       <span class="viewing-eyebrow">Latest generated address</span>
       </div>
-      <div class="pane-tools">
-       <span class="material-icons">search</span>
+      <div class="viewing-list" id="viewingList"></div>
+     </section>
+
+     <section class="pane inbox inbox-panel ui-card" aria-labelledby="inbox-heading">
+      <div class="inbox-header">
+       <div class="inbox-heading">
+        <div class="pane-title" id="inbox-heading">Inbox</div>
+       </div>
+       <div class="inbox-controls"></div>
+      </div>
+      <div class="inbox-toolbar">
+       <div class="pane-tools inbox-tools">
+        <span class="material-icons">search</span>
         <input type="text" id="inboxSearch" placeholder="Cari subject, sender, recipient, domain">
-       <select id="inboxSort">
-        <option value="newest">Terbaru</option>
-        <option value="oldest">Terlama</option>
+        <select id="inboxSort">
+         <option value="newest">Terbaru</option>
+         <option value="oldest">Terlama</option>
          <option value="sender-az">Sender A-Z</option>
          <option value="sender-za">Sender Z-A</option>
          <option value="recipient-az">Penerima A-Z</option>
          <option value="recipient-za">Penerima Z-A</option>
-       </select>
+        </select>
+       </div>
+       <button type="button" class="ui-button ui-button-outline" id="btn-refresh-inbox">
+        <span class="material-icons">refresh</span>
+        Refresh
+       </button>
       </div>
       <div class="pane-body inbox-list" id="inbox-list"></div>
-      <div class="pane-empty" id="inbox-empty">Select an address to view messages.</div>
+      <div class="pane-empty" id="inbox-empty">Create an address to view messages.</div>
       <div class="pagination-controls" id="inboxPagination">
-       <button class="btn btn-secondary" id="btn-inbox-prev" disabled>Previous</button>
-       <button class="btn btn-secondary" id="btn-inbox-next" disabled>Next</button>
+       <button class="ui-button ui-button-outline" id="btn-inbox-prev" disabled>Previous</button>
+       <button class="ui-button ui-button-outline" id="btn-inbox-next" disabled>Next</button>
       </div>
-     </div>
+     </section>
     </section>
    </main>
   </div>
 
-  <div class="modal-overlay" id="ruleModal">
-   <div class="modal glass-card wide">
-    <div class="modal-header">
-     <h2 class="modal-title" id="modalTitle">Add New Rule</h2>
-     <button class="modal-close" id="btn-modal-close"><span class="material-icons">close</span></button>
-    </div>
-    <div class="modal-body">
-     <form id="ruleForm" class="form-grid">
-      <div class="field">
-       <span class="field-label">Domain</span>
-       <select id="fromDomain" class="form-select"></select>
-      </div>
-      <div class="field">
-       <span class="field-label">Nama Email</span>
-        <div class="input-group email-name-generator">
-         <input type="text" id="fromLocalPart" class="form-input" placeholder="contoh: halo" required>
-         <div class="input-actions">
-          <select id="emailNameStyle" class="form-select" aria-label="Gaya nama email">
-           <option value="id">Indonesia</option>
-           <option value="us">US</option>
-          </select>
-          <button type="button" class="icon-btn-sm" id="btn-generate-email-name" title="Generate nama email" aria-label="Generate nama email">
-           <span class="material-icons">autorenew</span>
-          </button>
-         </div>
-        </div>
-       <span class="field-help" id="fromHelp">Cukup isi nama. Domain pilih di kiri.</span>
-       <span class="field-help field-preview" id="fromPreview">Hasil: nama@domain.com</span>
-       <span class="field-error" id="fromError"></span>
-      </div>
-      <div class="field">
-       <span class="field-label" id="toLabel">Tujuan</span>
-       <input type="text" id="toEmail" class="form-input" placeholder="admin@company.com" required>
-       <select id="workerSelect" class="form-select is-hidden"></select>
-       <span class="field-help" id="toHelp">Tujuan email penerima.</span>
-       <span class="field-error" id="toError"></span>
-      </div>
-      <div class="field">
-       <span class="field-label">Rule Type</span>
-       <select id="ruleType" class="form-select">
-        <option value="forward">Forward</option>
-        <option value="drop">Drop (Delete)</option>
-        <option value="worker" selected>Send to Worker</option>
-       </select>
-      </div>
-      <div class="field">
-       <span class="field-label">Priority</span>
-       <select id="priority" class="form-select">
-        <option value="1">High (1)</option>
-        <option value="5" selected>Normal (5)</option>
-        <option value="10">Low (10)</option>
-       </select>
-      </div>
-      <div class="field">
-       <span class="field-label">Description (Optional)</span>
-       <input type="text" id="description" class="form-input" placeholder="Short note">
-      </div>
-     </form>
-    </div>
-    <div class="modal-actions">
-     <button type="button" class="btn btn-cancel" id="btn-cancel">Cancel</button>
-     <button type="submit" form="ruleForm" class="btn" id="saveBtn"><span class="material-icons">save</span> Save Rule</button>
-    </div>
-   </div>
-  </div>
+
 
   <div class="viewer-overlay" id="viewerOverlay">
    <div class="viewer-panel" id="viewerPanel">
@@ -379,7 +269,6 @@
    </div>
   </div>
 
-  <script src="/bgStars.js" defer></script>
   <script src="/main.js" defer></script>
  </body>
 </html>

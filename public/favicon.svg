@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Cloudflare Mail">
+  <defs>
+    <linearGradient id="bg" x1="10" y1="6" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2dd4bf" />
+      <stop offset=".55" stop-color="#14b8a6" />
+      <stop offset="1" stop-color="#0f766e" />
+    </linearGradient>
+    <linearGradient id="paper" x1="16" y1="20" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff" />
+      <stop offset="1" stop-color="#ecfdf9" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#bg)" />
+  <rect x="11" y="18" width="42" height="29" rx="8" fill="url(#paper)" />
+  <path d="M15.5 24.5 32 36l16.5-11.5" fill="none" stroke="#0f766e" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="48.5" cy="15.5" r="7" fill="#0f766e" stroke="#ffffff" stroke-width="3" />
+</svg>

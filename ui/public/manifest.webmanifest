@@ -1,0 +1,17 @@
+{
+  "name": "Cloudflare Mail",
+  "short_name": "CF Mail",
+  "description": "Self-hosted Cloudflare Email Routing and inbox panel.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f8fa",
+  "theme_color": "#0f766e",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

@@ -1,17 +1,13 @@
-// main.js - Glassmorphism mail client UI for Cloudflare Email Panel
+// main.js - Flat Tailwind mail client UI for Cloudflare Email Panel
 // Simplified: Password-only auth, private mode
 const defaultConfig = {
   panel_title: 'Cloudflare Email Panel',
-  welcome_message: 'Manage routing and inbox in one place'
+  welcome_message: 'Create an address and read its inbox'
 };
 
 const state = {
-  rules: [],
-  ruleMap: new Map(),
-  addresses: [],
-  selectedAddress: null,
-  addressActivity: {},
-  inboxSummary: {},
+  createdAddresses: [],
+  latestAddress: null,
   inbox: [],
   inboxPage: 0,
   inboxLimit: 20,
@@ -19,31 +15,26 @@ const state = {
   domainsLoaded: false,
   domainsLoading: false,
   domainsError: null,
-  savingRule: false,
   workers: [],
   workersLoaded: false,
   workersLoading: false,
   workersError: null,
-  editingRuleId: null,
-  editingRuleZoneId: null,
   currentEmailId: null,
   currentEmailData: null
 };
 
 let sessionOk = false;
 let csrfToken = null;
-let totpEnabled = false;
-let pendingTotp = null;
+let passwordConfigured = false;
 
 const accentPresets = {
-  ocean: { accent: '#5aa9ff', accent2: '#7fd1ff', accent3: '#3c6fff' },
-  purple: { accent: '#6366f1', accent2: '#818cf8', accent3: '#4f46e5' },
-  emerald: { accent: '#10b981', accent2: '#34d399', accent3: '#059669' },
-  amber: { accent: '#f59e0b', accent2: '#fbbf24', accent3: '#d97706' }
+  ocean: { accent: '#277da1', accent2: '#43aa8b', accent3: '#4d908e' },
+  sunset: { accent: '#f3722c', accent2: '#f8961e', accent3: '#f9844a' },
+  meadow: { accent: '#90be6d', accent2: '#43aa8b', accent3: '#4d908e' },
+  coral: { accent: '#f94144', accent2: '#f3722c', accent3: '#f9844a' }
 };
 
-const ADDRESS_SORT_KEY = 'addressSort';
-const ADDRESS_ACTIVITY_KEY = 'addressActivity';
+const CREATED_ADDRESSES_KEY = 'createdAddresses';
 const emailNameParts = {
   id: {
     first: ['aditya', 'agung', 'andika', 'bagas', 'bima', 'dewi', 'dimas', 'farhan', 'fajar', 'fitri', 'galih', 'hana', 'indah', 'joko', 'kurnia', 'lina', 'maulana', 'nabila', 'putra', 'rani', 'reza', 'rizky', 'salsa', 'tiara', 'wahyu', 'yusuf'],
@@ -59,17 +50,41 @@ function randomItem(items) {
   return items[Math.floor(Math.random() * items.length)];
 }
 
-function generateEmailName() {
-  const style = document.getElementById('emailNameStyle')?.value === 'us' ? 'us' : 'id';
-  const parts = emailNameParts[style];
+function createRandomLocalPart(style = 'us') {
+  const parts = emailNameParts[style] || emailNameParts.us;
   const suffix = String(Math.floor(Math.random() * 900) + 100);
-  const localPart = `${randomItem(parts.first)}.${randomItem(parts.last)}${suffix}`;
-  const input = document.getElementById('fromLocalPart');
+  return `${randomItem(parts.first)}.${randomItem(parts.last)}${suffix}`;
+}
+
+function getNameStyle() {
+  const select = document.getElementById('nameStyle');
+  const value = select?.value;
+  return value === 'id' ? 'id' : 'us';
+}
+
+function generateCreateName() {
+  const input = document.getElementById('createName');
   if (!input) return;
-  input.value = localPart;
-  updateFromPreview();
-  validateRuleForm();
+  input.value = createRandomLocalPart(getNameStyle());
+  setCreateError('');
   input.focus();
+}
+
+function setCreateError(message = '') {
+  const error = document.getElementById('createError');
+  if (error) error.textContent = message;
+}
+
+function setCreateLoading(loading) {
+  const submit = document.getElementById('btn-create-address');
+  const randomBtn = document.getElementById('btn-create-random');
+  const nameBtn = document.getElementById('btn-random-name');
+  if (submit) {
+    submit.disabled = loading;
+    submit.textContent = loading ? 'Creating...' : 'Create Address';
+  }
+  if (randomBtn) randomBtn.disabled = loading;
+  if (nameBtn) nameBtn.disabled = loading;
 }
 
 async function api(path, opts = {}) {
@@ -82,42 +97,11 @@ async function api(path, opts = {}) {
   if (res.status === 401) {
     sessionOk = false;
     csrfToken = null;
-    showLogin();
+    window.location.href = '/login';
     throw new Error('Unauthorized');
   }
   if (!res.ok) throw new Error((await res.text()) || res.statusText);
   return res.json();
-}
-
-function showLogin() {
-  const modal = document.getElementById('loginModal');
-  if (modal) modal.classList.add('active');
-  document.body.classList.add('login-active');
-  const setupModal = document.getElementById('setupPasswordModal');
-  if (setupModal) setupModal.classList.remove('active');
-  updateTotpVisibility();
-}
-
-function hideLogin() {
-  const modal = document.getElementById('loginModal');
-  if (modal) modal.classList.remove('active');
-  document.body.classList.remove('login-active');
-}
-
-function updateTotpVisibility() {
-  const group = document.getElementById('totpGroup');
-  if (group) group.classList.toggle('is-hidden', !totpEnabled);
-}
-
-function showSetupPassword() {
-  hideLogin();
-  const modal = document.getElementById('setupPasswordModal');
-  if (modal) modal.classList.add('active');
-}
-
-function hideSetupPassword() {
-  const modal = document.getElementById('setupPasswordModal');
-  if (modal) modal.classList.remove('active');
 }
 
 function showNotification(message, type = 'success') {
@@ -166,6 +150,8 @@ function applyAccentColors(accent, accent2, accent3) {
   root.style.setProperty('--accent', accent);
   root.style.setProperty('--accent-2', accent2);
   root.style.setProperty('--accent-3', accent3);
+  const rgb = hexToRgb(accent);
+  root.style.setProperty('--accent-rgb', rgb ? `${rgb.r}, ${rgb.g}, ${rgb.b}` : '39, 125, 161');
 }
 
 function setPresetActive(preset) {
@@ -197,7 +183,9 @@ function applyCustomAccent(hex) {
 
 function loadAccentTheme() {
   const custom = localStorage.getItem('accentCustom');
-  const preset = localStorage.getItem('accentPreset') || 'ocean';
+  const stored = localStorage.getItem('accentPreset');
+  const legacyMap = { purple: 'coral', emerald: 'meadow', amber: 'sunset' };
+  const preset = accentPresets[stored] ? stored : (legacyMap[stored] || 'ocean');
   if (custom && applyCustomAccent(custom)) return;
   applyAccentPreset(preset);
 }
@@ -207,71 +195,6 @@ function syncAccentInputs(hex) {
   const display = document.getElementById('accentHexDisplay');
   if (picker) picker.value = hex;
   if (display) display.value = hex;
-}
-
-function loadAddressActivity() {
-  try {
-    const raw = localStorage.getItem(ADDRESS_ACTIVITY_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object') return parsed;
-  } catch {}
-  return {};
-}
-
-function saveAddressActivity() {
-  try {
-    localStorage.setItem(ADDRESS_ACTIVITY_KEY, JSON.stringify(state.addressActivity || {}));
-  } catch {}
-}
-
-function setAddressActivity(address, timestamp) {
-  if (!address || !Number.isFinite(timestamp)) return;
-  const key = address.toLowerCase();
-  const current = state.addressActivity[key] || 0;
-  if (timestamp > current) {
-    state.addressActivity[key] = timestamp;
-    saveAddressActivity();
-  }
-}
-
-function getAddressActivity(address) {
-  if (!address) return 0;
-  return state.addressActivity[address.toLowerCase()] || 0;
-}
-
-function formatRelativeTime(value) {
-  const time = value instanceof Date ? value.getTime() : new Date(value || 0).getTime();
-  if (!Number.isFinite(time) || time <= 0) return '-';
-  const diff = Date.now() - time;
-  const abs = Math.abs(diff);
-  const units = [
-    ['tahun', 365 * 24 * 60 * 60 * 1000],
-    ['bulan', 30 * 24 * 60 * 60 * 1000],
-    ['hari', 24 * 60 * 60 * 1000],
-    ['jam', 60 * 60 * 1000],
-    ['menit', 60 * 1000]
-  ];
-  for (const [label, ms] of units) {
-    if (abs >= ms) {
-      const amount = Math.max(1, Math.floor(abs / ms));
-      return diff >= 0 ? `${amount} ${label} lalu` : `dalam ${amount} ${label}`;
-    }
-  }
-  return 'baru saja';
-}
-
-function getRuleTimestamp(rule) {
-  const candidates = [rule.created_at, rule.created, rule.created_on, rule.modified_at, rule.modified_on];
-  for (const value of candidates) {
-    const time = new Date(value || 0).getTime();
-    if (Number.isFinite(time) && time > 0) return time;
-  }
-  return 0;
-}
-
-function hasActivityData() {
-  return Object.values(state.addressActivity).some((value) => Number(value) > 0);
 }
 
 const themeQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
@@ -310,12 +233,19 @@ function loadTheme() {
 
 const SIDEBAR_STATE_KEY = 'sidebarState';
 
-function updateSidebarHandle(state) {
-  const handleIcon = document.getElementById('sidebarHandleIcon');
-  const handle = document.getElementById('sidebarHandle');
+function isSidebarOpen() {
+  return document.body.classList.contains('sidebar-open');
+}
+
+function updateSidebarToggle(state) {
+  const toggle = document.getElementById('sidebarToggle');
+  const sidebar = document.getElementById('sidebar');
   const isOpen = state === 'open';
-  if (handleIcon) handleIcon.textContent = isOpen ? 'chevron_left' : 'chevron_right';
-  if (handle) handle.setAttribute('aria-expanded', String(isOpen));
+  if (toggle) toggle.setAttribute('aria-expanded', String(isOpen));
+  if (sidebar) {
+    sidebar.setAttribute('aria-hidden', String(!isOpen));
+    sidebar.inert = !isOpen;
+  }
 }
 
 function showView() {
@@ -323,9 +253,10 @@ function showView() {
   if (el) el.style.display = '';
 }
 
-function setSidebarState(state) {
+function setSidebarState(state, options = {}) {
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebarOverlay');
+  const wasOpen = isSidebarOpen();
   const isOpen = state === 'open';
   document.body.classList.toggle('sidebar-open', isOpen);
   if (sidebar) {
@@ -333,13 +264,17 @@ function setSidebarState(state) {
     sidebar.classList.toggle('is-collapsed', !isOpen);
   }
   if (overlay) overlay.classList.toggle('is-open', isOpen);
-  localStorage.setItem(SIDEBAR_STATE_KEY, state);
-  updateSidebarHandle(state);
+  try {
+    localStorage.setItem(SIDEBAR_STATE_KEY, state);
+  } catch {}
+  updateSidebarToggle(state);
+  if (!isOpen && wasOpen && options.focusToggle) {
+    document.getElementById('sidebarToggle')?.focus();
+  }
 }
 
 function toggleSidebar() {
-  const current = document.body.classList.contains('sidebar-open') ? 'open' : 'collapsed';
-  setSidebarState(current === 'open' ? 'collapsed' : 'open');
+  setSidebarState(isSidebarOpen() ? 'collapsed' : 'open');
 }
 
 async function checkSession() {
@@ -352,81 +287,6 @@ async function checkSession() {
     sessionOk = false;
     csrfToken = null;
     return false;
-  }
-}
-
-function setAuthNotice(message, tone = 'warning') {
-  const notice = document.getElementById('authNotice');
-  if (!notice) return;
-  if (!message) {
-    notice.textContent = '';
-    notice.className = 'auth-notice is-hidden';
-    return;
-  }
-  notice.textContent = message;
-  notice.className = `auth-notice ${tone}`;
-  notice.classList.remove('is-hidden');
-}
-
-function setSetupNotice(message, tone = 'warning') {
-  const notice = document.getElementById('setupNotice');
-  if (!notice) return;
-  if (!message) {
-    notice.textContent = '';
-    notice.className = 'auth-notice is-hidden';
-    return;
-  }
-  notice.textContent = message;
-  notice.className = `auth-notice ${tone}`;
-  notice.classList.remove('is-hidden');
-}
-
-async function handleLogin(event) {
-  event.preventDefault();
-  const password = document.getElementById('passwordInput').value;
-  const token = document.getElementById('totpInput')?.value.trim() || '';
-  if (!password && !totpEnabled) {
-    showNotification('Password required', 'error');
-    return;
-  }
-  if (totpEnabled && !token) {
-    showNotification('2FA code required', 'error');
-    return;
-  }
-  try {
-    const data = await api('/api/login', { method: 'POST', body: JSON.stringify({ password, token }) });
-    if (data.csrfToken) csrfToken = data.csrfToken;
-    hideLogin();
-    sessionOk = true;
-    await loadRules();
-    showView();
-    restoreSelectedAddress();
-  } catch (e) {
-    showNotification('Login failed: ' + e.message, 'error');
-  }
-}
-
-async function handleSetupPassword(event) {
-  event.preventDefault();
-  const password = document.getElementById('newPassword').value;
-  const confirm = document.getElementById('confirmPassword').value;
-  if (password !== confirm) {
-    setSetupNotice('Password tidak cocok!', 'error');
-    return;
-  }
-  if (password.length < 8) {
-    setSetupNotice('Password minimal 8 karakter', 'error');
-    return;
-  }
-  setSetupNotice('');
-  try {
-    const data = await api('/api/setup-password', { method: 'POST', body: JSON.stringify({ password }) });
-    if (data.csrfToken) csrfToken = data.csrfToken;
-    showNotification(data.message || 'Password berhasil diset!', 'success');
-    hideSetupPassword();
-    showLogin();
-  } catch (e) {
-    setSetupNotice(e.message, 'error');
   }
 }
 
@@ -571,70 +431,8 @@ async function saveSettings(e) {
     await api('/api/config', { method: 'POST', body: JSON.stringify(body) });
     showNotification('Configuration saved!', 'success');
     loadDomains(true);
-    loadTotpStatus();
   } catch (err) {
     showNotification('Save failed: ' + err.message, 'error');
-  }
-}
-
-async function loadTotpStatus() {
-  try {
-    const config = await api('/api/config');
-    const enabled = !!config.has_totp;
-    totpEnabled = enabled;
-    updateTotpVisibility();
-    const statusEl = document.getElementById('totpStatus');
-    statusEl.textContent = enabled ? '2FA aktif' : '2FA tidak aktif';
-    statusEl.className = enabled ? 'field-help ok' : 'field-help';
-    const disableBtn = document.getElementById('btn-totp-disable');
-    if (disableBtn) disableBtn.classList.toggle('is-hidden', !enabled);
-  } catch (e) {
-    const statusEl = document.getElementById('totpStatus');
-    if (statusEl) statusEl.textContent = 'Gagal memuat status 2FA';
-  }
-}
-
-async function setupTotp() {
-  try {
-    pendingTotp = await api('/api/totp/setup', { method: 'POST' });
-    const enroll = document.getElementById('totpEnroll');
-    if (enroll) {
-      enroll.classList.remove('is-hidden');
-      const qr = document.getElementById('totpQr');
-      const secretText = document.getElementById('totpSecretText');
-      const confirm = document.getElementById('totpConfirmCode');
-      if (qr) qr.src = pendingTotp.qr_data_url;
-      if (secretText) secretText.textContent = pendingTotp.secret;
-      if (confirm) confirm.value = '';
-    }
-  } catch (e) {
-    showNotification('Gagal generate 2FA: ' + e.message, 'error');
-  }
-}
-
-async function activateTotp() {
-  const code = document.getElementById('totpConfirmCode')?.value.trim() || '';
-  if (!code) { showNotification('Masukkan kode 6 digit', 'error'); return; }
-  try {
-    const data = await api('/api/totp/activate', { method: 'POST', body: JSON.stringify({ token: code }) });
-    showNotification(data.message || '2FA aktif', 'success');
-    pendingTotp = null;
-    const enroll = document.getElementById('totpEnroll');
-    if (enroll) enroll.classList.add('is-hidden');
-    loadTotpStatus();
-  } catch (e) {
-    showNotification('Activate failed: ' + e.message, 'error');
-  }
-}
-
-async function disableTotp() {
-  if (!confirm('Nonaktifkan 2FA?')) return;
-  try {
-    await api('/api/totp/disable', { method: 'POST' });
-    showNotification('2FA dinonaktifkan', 'success');
-    loadTotpStatus();
-  } catch (e) {
-    showNotification('Gagal menonaktifkan: ' + e.message, 'error');
   }
 }
 
@@ -642,7 +440,7 @@ async function loadDomains(force = false) {
   if (state.domainsLoaded && !force) return state.domains;
   state.domainsLoading = true;
   state.domainsError = null;
-  updateDomainSelect();
+  updateCreateDomainSelect();
   try {
     const domains = await api('/api/domains');
     state.domains = Array.isArray(domains) ? domains : [];
@@ -655,8 +453,7 @@ async function loadDomains(force = false) {
   }
   state.domainsLoading = false;
   state.domainsLoaded = true;
-  updateDomainSelect();
-  updateDomainFilter();
+  updateCreateDomainSelect();
   return state.domains;
 }
 
@@ -665,7 +462,6 @@ async function loadWorkers(force = false) {
   if (state.workersLoading) return state.workers;
   state.workersLoading = true;
   state.workersError = null;
-  updateWorkerSelect();
   try {
     const workers = await api('/api/workers');
     state.workers = Array.isArray(workers) ? workers : [];
@@ -677,395 +473,139 @@ async function loadWorkers(force = false) {
   }
   state.workersLoading = false;
   state.workersLoaded = true;
-  updateWorkerSelect();
-  if (document.getElementById('ruleType')?.value === 'worker') {
-    updateRuleTypeUI();
-    validateRuleForm();
-  }
   return state.workers;
 }
 
-function updateWorkerSelect(selectedName = null) {
-  const select = document.getElementById('workerSelect');
-  if (!select) return;
-  select.innerHTML = '';
-  if (state.workersLoading) {
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'Memuat worker...';
-    select.appendChild(opt);
-    select.disabled = true;
-    return;
-  }
-  if (!state.workersLoaded) {
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'Memuat worker...';
-    select.appendChild(opt);
-    select.disabled = true;
-    return;
-  }
-  if (state.workersError) {
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'Gagal memuat worker';
-    select.appendChild(opt);
-    select.disabled = true;
-    return;
-  }
-  if (!state.workers.length) {
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'Tidak ada worker ditemukan';
-    select.appendChild(opt);
-    select.disabled = true;
-    return;
-  }
-  select.disabled = false;
-  state.workers.forEach((worker) => {
-    const name = worker.name || worker.id || '';
-    if (!name) return;
-    const opt = document.createElement('option');
-    opt.value = name;
-    opt.textContent = name;
-    select.appendChild(opt);
-  });
-  if (selectedName) {
-    const hasMatch = Array.from(select.options).some((opt) => opt.value === selectedName);
-    if (!hasMatch) {
-      const opt = document.createElement('option');
-      opt.value = selectedName;
-      opt.textContent = `${selectedName} (custom)`;
-      select.appendChild(opt);
-    }
-    select.value = selectedName;
-  }
-}
-
-function updateDomainFilter() {
-  const select = document.getElementById('domainFilter');
+function updateCreateDomainSelect() {
+  const select = document.getElementById('createDomain');
   if (!select) return;
   const currentValue = select.value;
-  select.innerHTML = '<option value="">All Domains</option>';
-  state.domains.forEach((domain) => {
-    if (!domain || !domain.id || !domain.name) return;
-    const opt = document.createElement('option');
-    opt.value = domain.id;
-    opt.textContent = domain.name;
-    select.appendChild(opt);
-  });
-  if (currentValue && Array.from(select.options).some((o) => o.value === currentValue)) {
-    select.value = currentValue;
-  }
-}
-
-function getSelectedDomainFilter() {
-  const select = document.getElementById('domainFilter');
-  if (!select || !select.value) return null;
-  return select.value;
-}
-
-function updateDomainSelect(selectedId = null) {
-  const select = document.getElementById('fromDomain');
-  if (!select) return;
   select.innerHTML = '';
   if (state.domainsLoading) {
     select.disabled = true;
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'Memuat domain...';
-    select.appendChild(opt);
+    select.appendChild(new Option('Loading domains...', ''));
     return;
   }
   if (state.domainsError) {
     select.disabled = true;
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'Gagal memuat domain';
-    select.appendChild(opt);
+    select.appendChild(new Option('Failed to load domains', ''));
     return;
   }
   if (!state.domains.length) {
     select.disabled = true;
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'Domain list unavailable';
-    select.appendChild(opt);
+    select.appendChild(new Option('No domains available', ''));
     return;
   }
-  select.disabled = false;
   state.domains.forEach((domain) => {
     if (!domain || !domain.id || !domain.name) return;
-    const opt = document.createElement('option');
-    opt.value = domain.id;
-    opt.textContent = domain.name;
-    opt.dataset.name = domain.name;
-    select.appendChild(opt);
+    select.appendChild(new Option(domain.name, domain.id));
   });
-  if (!select.options.length) {
-    select.disabled = true;
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'Domain list unavailable';
-    select.appendChild(opt);
-    return;
-  }
-  if (selectedId && Array.from(select.options).some((opt) => opt.value === selectedId)) {
-    select.value = selectedId;
+  select.disabled = false;
+  if (currentValue && Array.from(select.options).some((opt) => opt.value === currentValue)) {
+    select.value = currentValue;
   }
 }
 
-function getSelectedDomain() {
-  const select = document.getElementById('fromDomain');
+function getSelectedCreateDomain() {
+  const select = document.getElementById('createDomain');
   if (!select || select.disabled || !select.value) return null;
   const option = select.options[select.selectedIndex];
-  const id = select.value.trim();
-  const name = (option?.dataset?.name || option?.textContent || '').trim();
-  if (!id || !name) return null;
-  return { id, name };
+  const name = (option?.textContent || '').trim();
+  if (!name) return null;
+  return { id: select.value.trim(), name };
 }
 
-function getDomainValidationError() {
-  if (state.domainsLoading) return 'Daftar domain sedang dimuat.';
-  if (state.domainsError) return 'Gagal memuat domain.';
-  if (!state.domains.length) return 'Daftar domain kosong.';
-  if (!getSelectedDomain()) return 'Pilih domain yang valid.';
+function validateLocalPart(value) {
+  if (!value) return 'Nama email wajib diisi.';
+  if (value.includes('@')) return 'Jangan gunakan @ pada nama email.';
+  if (/\s/.test(value)) return 'Tidak boleh ada spasi.';
+  if (!/^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(value)) return 'Format nama email tidak valid.';
   return '';
 }
 
-function getRuleMapKey(ruleId, zoneId) {
-  return `${zoneId || 'default'}:${ruleId}`;
-}
-
-async function loadRules() {
+function loadCreatedAddresses() {
   try {
-    await loadDomains(true);
-    let rules = [];
-    if (state.domains.length) {
-      const requests = state.domains.map((domain) =>
-        api(`/api/rules?zoneId=${encodeURIComponent(domain.id)}`)
-          .then((data) => ({ status: 'ok', domain, data }))
-          .catch((err) => ({ status: 'error', domain, data: [], error: err.message }))
-      );
-      const results = await Promise.all(requests);
-      results.forEach((result) => {
-        if (result.status === 'ok') {
-          result.data.forEach((rule) => {
-            rule.zoneId = result.domain.id;
-            rule.zoneName = result.domain.name;
-            rules.push(rule);
-          });
-        } else {
-          // Rule access may be unavailable; keep the login UI free of API permission messages.
-        }
-      });
-      setAuthNotice('');
-    }
-    state.rules = rules;
-    state.ruleMap = new Map();
-    rules.forEach((rule) => {
-      state.ruleMap.set(getRuleMapKey(rule.id, rule.zoneId), rule);
-    });
-    await loadInboxSummary();
-    buildAddressList();
-  } catch (e) {
-    showNotification('Load rules failed: ' + e.message, 'error');
-  }
-}
-
-async function loadInboxSummary() {
-  try {
-    const rows = await api('/api/inbox/summary');
-    const summary = {};
-    (Array.isArray(rows) ? rows : []).forEach((row) => {
-      const recipient = String(row.recipient || '').trim().toLowerCase();
-      if (!recipient) return;
-      const latest = new Date(row.latest_at || 0).getTime();
-      const first = new Date(row.first_at || 0).getTime();
-      summary[recipient] = {
-        latestAt: Number.isFinite(latest) ? latest : 0,
-        firstAt: Number.isFinite(first) ? first : 0,
-        total: Number(row.total || 0)
-      };
-      if (Number.isFinite(latest) && latest > 0) setAddressActivity(recipient, latest);
-    });
-    state.inboxSummary = summary;
-  } catch {
-    state.inboxSummary = {};
-  }
-}
-
-function buildAddressList() {
-  const map = new Map();
-  state.rules.forEach((rule) => {
-    const address = rule.matchers && rule.matchers[0] && rule.matchers[0].value;
-    if (!address) return;
-    const key = address.toLowerCase();
-    const action = rule.actions && rule.actions[0] ? rule.actions[0] : {};
-    const summary = state.inboxSummary[key] || {};
-    const createdAt = getRuleTimestamp(rule);
-    const existing = map.get(key) || {
-      address,
-      count: 0,
-      ruleId: rule.id,
-      zoneId: rule.zoneId,
-      zoneName: rule.zoneName,
-      type: action.type || 'forward',
-      enabled: !!rule.enabled,
-      destination: Array.isArray(action.value) ? action.value[0] : action.value,
-      lastActivity: summary.latestAt || getAddressActivity(address),
-      firstActivity: summary.firstAt || 0,
-      messageCount: summary.total || 0,
-      createdAt
-    };
-    existing.count += 1;
-    existing.lastActivity = Math.max(existing.lastActivity || 0, summary.latestAt || getAddressActivity(address));
-    existing.messageCount = Math.max(existing.messageCount || 0, summary.total || 0);
-    existing.createdAt = existing.createdAt ? Math.min(existing.createdAt, createdAt || existing.createdAt) : createdAt;
-    map.set(key, existing);
-  });
-  state.addresses = Array.from(map.values());
-  updateAddressSortAvailability();
-  renderAddressList();
-}
-
-function renderAddressList() {
-  const container = document.getElementById('address-list');
-  const empty = document.getElementById('address-empty');
-  const search = (document.getElementById('addressSearch').value || '').trim().toLowerCase();
-  const sortValue = document.getElementById('addressSort')?.value || 'name-asc';
-  const domainFilter = getSelectedDomainFilter();
-  let items = state.addresses.filter((item) => {
-    if (domainFilter && item.zoneId !== domainFilter) return false;
-    if (!search) return true;
-    return [item.address, item.zoneName, item.type, item.destination]
+    const raw = localStorage.getItem(CREATED_ADDRESSES_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((value) => String(value || '').trim().toLowerCase())
       .filter(Boolean)
-      .join(' ')
-      .toLowerCase()
-      .includes(search);
-  });
-  items = [...items].sort((a, b) => {
-    const nameA = a.address.toLowerCase();
-    const nameB = b.address.toLowerCase();
-    if (sortValue === 'name-desc') return nameB.localeCompare(nameA);
-    if (sortValue === 'message-newest' || sortValue === 'message-oldest') {
-      const aTime = a.lastActivity || 0;
-      const bTime = b.lastActivity || 0;
-      if (!aTime && !bTime) return nameA.localeCompare(nameB);
-      if (!aTime) return 1;
-      if (!bTime) return -1;
-      return sortValue === 'message-newest' ? bTime - aTime : aTime - bTime;
+      .filter((value, index, list) => list.indexOf(value) === index);
+  } catch {
+    return [];
+  }
+}
+
+function saveCreatedAddresses() {
+  try {
+    localStorage.setItem(CREATED_ADDRESSES_KEY, JSON.stringify(state.createdAddresses));
+  } catch {}
+}
+
+function addCreatedAddress(address) {
+  const normalized = String(address || '').trim().toLowerCase();
+  if (!normalized) return;
+  state.latestAddress = normalized;
+  if (!state.createdAddresses.includes(normalized)) {
+    state.createdAddresses.push(normalized);
+    saveCreatedAddresses();
+  }
+  renderViewingPanel();
+}
+
+async function loadLatestGeneratedAddress() {
+  try {
+    const latest = await api('/api/addresses/latest');
+    const address = String(latest?.address || '').trim().toLowerCase();
+    state.latestAddress = address || null;
+    if (address && !state.createdAddresses.includes(address)) {
+      state.createdAddresses.push(address);
+      saveCreatedAddresses();
     }
-    return nameA.localeCompare(nameB);
-  });
-  container.innerHTML = '';
-  items.forEach((item, index) => {
-    const fullAddress = item.address || '';
-    const atIndex = fullAddress.indexOf('@');
-    const localPart = atIndex > -1 ? fullAddress.slice(0, atIndex) : fullAddress;
-    const domainPart = atIndex > -1 ? fullAddress.slice(atIndex + 1) : '';
-    const domainLabel = domainPart ? `@${domainPart}` : '';
-    const lastLabel = item.lastActivity ? formatRelativeTime(item.lastActivity) : '-';
-    const createdLabel = item.createdAt ? formatRelativeTime(item.createdAt) : '-';
-    const destinationLabel = item.destination ? String(item.destination) : '-';
-    const el = document.createElement('div');
-    el.className = `address-item${state.selectedAddress === item.address ? ' active' : ''}`;
-    el.classList.add('list-item');
-    el.style.animationDelay = `${Math.min(index, 8) * 40}ms`;
-    el.dataset.address = item.address;
-    el.dataset.id = item.ruleId;
-    el.dataset.zone = item.zoneId || '';
-    el.innerHTML = `
-      <div class="address-info">
-        <div class="addr-title" title="${escapeHtml(fullAddress)}">${escapeHtml(localPart || fullAddress)}</div>
-        <div class="addr-domain" title="${escapeHtml(domainLabel || fullAddress)}">${escapeHtml(domainLabel || '')}</div>
-        <div class="address-meta">
-          <span class="address-chip type-${escapeHtml(item.type)}">${escapeHtml(item.type)}</span>
-          <span class="address-chip ${item.enabled ? 'ok' : 'muted'}">${item.enabled ? 'aktif' : 'nonaktif'}</span>
-          <span>${item.messageCount || 0} pesan</span>
-        </div>
-        <div class="address-stats">
-          <span title="Pesan terakhir"><span class="material-icons">schedule</span>${escapeHtml(lastLabel)}</span>
-          <span title="Email dibuat"><span class="material-icons">add_circle</span>${escapeHtml(createdLabel)}</span>
-        </div>
-        <div class="address-destination" title="Tujuan: ${escapeHtml(destinationLabel)}">Tujuan: ${escapeHtml(destinationLabel)}</div>
-      </div>
-      <div class="address-actions">
-        <button class="mini-btn" data-action="copy" title="Copy email">
-          <span class="material-icons">content_copy</span>
-        </button>
-        <button class="mini-btn" data-action="toggle" title="Toggle">
-          <span class="material-icons">${item.enabled ? 'toggle_on' : 'toggle_off'}</span>
-        </button>
-        <button class="mini-btn" data-action="edit" title="Edit">
-          <span class="material-icons">edit</span>
-        </button>
-        <button class="mini-btn" data-action="delete" title="Delete">
-          <span class="material-icons">delete</span>
-        </button>
-      </div>
-    `;
-    container.appendChild(el);
-  });
-  empty.style.display = items.length ? 'none' : 'block';
+    renderViewingPanel();
+  } catch {}
 }
 
-function setSelectedAddress(address) {
-  state.selectedAddress = address;
-  localStorage.setItem('selectedAddress', address || '');
-  renderAddressList();
-  loadInbox(0);
-}
-
-function restoreSelectedAddress() {
-  if (!sessionOk) return;
-  const storedAddress = localStorage.getItem('selectedAddress');
-  if (storedAddress) {
-    state.selectedAddress = storedAddress;
-    renderAddressList();
-    loadInbox(0);
+function renderViewingPanel() {
+  const panel = document.getElementById('viewingPanel');
+  const list = document.getElementById('viewingList');
+  if (!panel || !list) return;
+  const address = state.latestAddress || '';
+  if (!address) {
+    panel.hidden = true;
+    list.innerHTML = '';
+    return;
   }
-}
+  panel.hidden = false;
+  list.innerHTML = '';
 
-function updateAddressSortAvailability() {
-  const select = document.getElementById('addressSort');
-  if (!select) return;
-  const hasActivity = state.addresses.some((item) => Number(item.lastActivity) > 0);
-  Array.from(select.options).forEach((opt) => {
-    if (opt.dataset.requiresActivity) opt.disabled = !hasActivity;
-  });
-  // Only reset message sort if no activity data
-  if (!hasActivity && (select.value === 'message-newest' || select.value === 'message-oldest')) {
-    select.value = 'name-asc';
-    localStorage.setItem(ADDRESS_SORT_KEY, 'name-asc');
-  }
-}
+  const item = document.createElement('div');
+  item.className = 'viewing-item';
 
-async function handleAddressToggle(ruleId, zoneId) {
-  const rule = state.ruleMap.get(getRuleMapKey(ruleId, zoneId));
-  if (!rule) return;
-  const willEnable = !rule.enabled;
-  try {
-    await api(`/api/rules/${encodeURIComponent(ruleId)}`, {
-      method: 'PUT',
-      body: JSON.stringify({ enabled: willEnable, zoneId: zoneId || null })
-    });
-    showNotification(willEnable ? 'Rule activated' : 'Rule deactivated', 'success');
-    loadRules();
-  } catch (e) {
-    showNotification('Toggle failed: ' + e.message, 'error');
-  }
-}
+  const label = document.createElement('span');
+  label.className = 'viewing-address';
+  label.title = address;
+  const prefix = document.createElement('span');
+  prefix.className = 'viewing-address-prefix';
+  prefix.textContent = 'Viewing';
+  label.appendChild(prefix);
+  label.appendChild(document.createTextNode(address));
 
-async function handleAddressDelete(ruleId, zoneId) {
-  if (!confirm('Delete this rule?')) return;
-  try {
-    await api(`/api/rules/${encodeURIComponent(ruleId)}?zoneId=${encodeURIComponent(zoneId || '')}`, { method: 'DELETE' });
-    showNotification('Rule deleted', 'success');
-    loadRules();
-  } catch (e) {
-    showNotification('Delete failed: ' + e.message, 'error');
-  }
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'ui-button ui-button-outline viewing-copy';
+  copyBtn.title = 'Copy address';
+  copyBtn.setAttribute('aria-label', `Copy ${address}`);
+  copyBtn.dataset.copyAddress = address;
+  const icon = document.createElement('span');
+  icon.className = 'material-icons';
+  icon.textContent = 'content_copy';
+  copyBtn.appendChild(icon);
+
+  item.appendChild(label);
+  item.appendChild(copyBtn);
+  list.appendChild(item);
 }
 
 async function copyToClipboard(value, successMessage, errorMessage) {
@@ -1089,277 +629,103 @@ async function copyToClipboard(value, successMessage, errorMessage) {
   }
 }
 
-async function copyAddress(address) {
-  return copyToClipboard(address, 'Email disalin', 'Gagal menyalin email');
+async function getInboxWorkerName() {
+  if (!state.workersLoaded && !state.workersLoading) await loadWorkers();
+  const worker = state.workers.find((item) => /inbox/i.test(item.name || '')) || state.workers[0];
+  return worker?.name || 'inbox-worker';
 }
 
-async function showAddRuleDialog() {
-  state.editingRuleId = null;
-  state.editingRuleZoneId = null;
-  state.savingRule = false;
-  document.getElementById('modalTitle').textContent = 'Add New Rule';
-  document.getElementById('saveBtn').innerHTML = '<span class="material-icons">save</span> Save Rule';
-  document.getElementById('ruleForm').reset();
-  const workerSelect = document.getElementById('workerSelect');
-  if (workerSelect) {
-    workerSelect.classList.add('is-hidden');
-    workerSelect.disabled = true;
-  }
-  updateDomainSelect();
-  updateFromPreview();
-  updateRuleTypeUI();
-  validateRuleForm();
-  document.getElementById('ruleModal').classList.add('active');
-  if (!state.domains.length || state.domainsError) {
-    loadDomains(true).then(() => {
-      updateFromPreview();
-      validateRuleForm();
-      if (state.domainsError) {
-        showNotification('Gagal memuat domain: ' + state.domainsError, 'error');
-      }
-    });
-  }
-}
-
-function populateEditRule(rule) {
-  const address = rule.matchers && rule.matchers[0] && rule.matchers[0].value;
-  if (!address) return;
-  const parts = address.split('@');
-  const localPart = parts[0] || '';
-  const domainName = parts[1] || '';
-
-  state.editingRuleId = rule.id;
-  state.editingRuleZoneId = rule.zoneId || null;
-  document.getElementById('modalTitle').textContent = 'Edit Rule';
-  document.getElementById('saveBtn').innerHTML = '<span class="material-icons">save</span> Update Rule';
-  document.getElementById('fromLocalPart').value = localPart;
-
-  updateDomainSelect(rule.zoneId || null);
-  if (domainName && !state.domains.find((d) => d.name === domainName)) {
-    const select = document.getElementById('fromDomain');
-    const opt = document.createElement('option');
-    opt.value = rule.zoneId || '';
-    opt.textContent = domainName;
-    select.appendChild(opt);
-    select.value = rule.zoneId || '';
-  }
-
-  const action = rule.actions && rule.actions[0] ? rule.actions[0] : {};
-  document.getElementById('ruleType').value = action.type || 'forward';
-  const dest = Array.isArray(action.value) ? action.value[0] : action.value || '';
-  document.getElementById('toEmail').value = dest;
-  if ((action.type || '') === 'worker') {
-    loadWorkers().then(() => updateWorkerSelect(dest));
-  }
-  updateFromPreview();
-  updateRuleTypeUI();
-  validateRuleForm();
-  document.getElementById('ruleModal').classList.add('active');
-}
-
-function closeRuleModal() {
-  document.getElementById('ruleModal').classList.remove('active');
-}
-
-function updateFromPreview() {
-  const localPart = document.getElementById('fromLocalPart').value.trim();
-  const selectedDomain = getSelectedDomain()?.name || '';
-  const preview = document.getElementById('fromPreview');
-  if (!preview) return;
-  const result = localPart && selectedDomain ? `${localPart}@${selectedDomain}` : 'nama@domain.com';
-  preview.textContent = `Hasil: ${result}`;
-}
-
-function updateRuleTypeUI() {
-  const type = document.getElementById('ruleType').value;
-  const toField = document.getElementById('toEmail');
-  const workerSelect = document.getElementById('workerSelect');
-  const toLabel = document.getElementById('toLabel');
-  const toHelp = document.getElementById('toHelp');
-  const isDrop = type === 'drop';
-  if (isDrop) {
-    toField.value = '';
-    toField.required = false;
-    toField.disabled = true;
-    toField.classList.remove('is-hidden');
-    if (workerSelect) { workerSelect.classList.add('is-hidden'); workerSelect.disabled = true; }
-    toLabel.textContent = 'Tujuan';
-    toHelp.textContent = 'Tidak perlu tujuan untuk drop.';
-    return;
-  }
-  if (type === 'worker') {
-    toLabel.textContent = 'Worker';
-    if (!state.workersLoaded && !state.workersLoading) loadWorkers();
-    if (state.workersLoading || !state.workersLoaded) {
-      toField.value = '';
-      toField.required = false;
-      toField.disabled = true;
-      toField.classList.add('is-hidden');
-      toHelp.textContent = 'Memuat daftar worker...';
-      if (workerSelect) {
-        workerSelect.classList.remove('is-hidden');
-        updateWorkerSelect();
-      }
-      return;
+async function handleCreateAddress(randomize = false) {
+  const nameInput = document.getElementById('createName');
+  const domainSelect = document.getElementById('createDomain');
+  if (!nameInput) return;
+  setCreateError('');
+  let localPart = nameInput.value.trim();
+  if (randomize) {
+    localPart = createRandomLocalPart(getNameStyle());
+    nameInput.value = localPart;
+    const availableDomains = state.domains.filter((item) => item && item.id && item.name);
+    if (availableDomains.length && domainSelect) {
+      const domain = randomItem(availableDomains);
+      domainSelect.value = domain.id;
     }
-    const workerFallback = !!state.workersError || !state.workers.length;
-    if (workerFallback) {
-      toField.disabled = false;
-      toField.required = true;
-      toField.classList.remove('is-hidden');
-      toField.placeholder = 'nama-worker';
-      toHelp.textContent = state.workersError ? 'Gagal memuat worker. Isi manual jika diperlukan.' : 'Tidak ada worker. Isi manual jika diperlukan.';
-      if (workerSelect) { workerSelect.classList.add('is-hidden'); workerSelect.disabled = true; }
-    } else {
-      toField.value = '';
-      toField.required = false;
-      toField.disabled = true;
-      toField.classList.add('is-hidden');
-      toHelp.textContent = 'Pilih worker untuk menerima pesan.';
-      if (workerSelect) { workerSelect.classList.remove('is-hidden'); updateWorkerSelect(); }
-    }
-    return;
   }
-  toField.disabled = false;
-  toField.required = true;
-  toField.placeholder = 'admin@company.com';
-  toField.classList.remove('is-hidden');
-  toField.value = type === 'forward' ? toField.value : '';
-  if (workerSelect) { workerSelect.classList.add('is-hidden'); workerSelect.disabled = true; }
-  toLabel.textContent = 'Tujuan';
-  toHelp.textContent = 'Tujuan email penerima.';
-}
-
-function validateLocalPart(value) {
-  if (!value) return 'Nama email wajib diisi.';
-  if (value.includes('@')) return 'Jangan gunakan @ pada nama email.';
-  if (/\s/.test(value)) return 'Tidak boleh ada spasi.';
-  if (!/^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(value)) return 'Format nama email tidak valid.';
-  return '';
-}
-
-function validateRuleForm() {
-  const localPart = document.getElementById('fromLocalPart').value.trim();
-  const type = document.getElementById('ruleType').value;
-  const toValue = document.getElementById('toEmail').value.trim();
-  const workerSelect = document.getElementById('workerSelect');
-  const fromError = document.getElementById('fromError');
-  const toError = document.getElementById('toError');
-  const saveBtn = document.getElementById('saveBtn');
   const localError = validateLocalPart(localPart);
-  const domainError = getDomainValidationError();
-  fromError.textContent = localError || domainError;
-  let toErr = '';
-  if (!['forward', 'drop', 'worker'].includes(type)) toErr = 'Tipe rule tidak valid.';
-  if (type === 'worker') {
-    const usingSelect = workerSelect && !workerSelect.classList.contains('is-hidden');
-    if (state.workersLoading || !state.workersLoaded) toErr = 'Worker sedang dimuat.';
-    else if (usingSelect) { if (!workerSelect.value || workerSelect.disabled) toErr = 'Worker wajib dipilih.'; }
-    else if (!toValue) toErr = 'Worker wajib diisi.';
-  } else if (type === 'forward') {
-    if (!toValue) toErr = 'Tujuan wajib diisi.';
-    else if (!/^\S+@\S+\.\S+$/.test(toValue)) toErr = 'Format email tujuan tidak valid.';
-  }
-  toError.textContent = toErr;
-  const valid = !state.savingRule && !localError && !domainError && !toErr;
-  saveBtn.disabled = !valid;
-  return valid;
-}
-
-function buildFromEmail() {
-  const localPart = document.getElementById('fromLocalPart').value.trim();
-  const domainName = getSelectedDomain()?.name || '';
-  return domainName ? `${localPart}@${domainName}` : localPart;
-}
-
-function getDestinationValue(type) {
-  const toField = document.getElementById('toEmail');
-  const workerSelect = document.getElementById('workerSelect');
-  if (type === 'worker') {
-    if (workerSelect && !workerSelect.classList.contains('is-hidden') && workerSelect.value) return workerSelect.value.trim();
-    return (toField && toField.value ? toField.value.trim() : '');
-  }
-  return toField && toField.value ? toField.value.trim() : '';
-}
-
-async function saveRule(event) {
-  event.preventDefault();
-  if (state.savingRule) return;
-  if (!validateRuleForm()) return;
-  const selectedDomain = getSelectedDomain();
-  if (!selectedDomain) {
-    validateRuleForm();
-    showNotification('Pilih domain yang valid terlebih dahulu.', 'error');
+  if (localError) {
+    setCreateError(localError);
+    nameInput.focus();
     return;
   }
-  const fromEmail = buildFromEmail();
-  const ruleType = document.getElementById('ruleType').value;
-  const toEmail = getDestinationValue(ruleType);
-  const zoneId = selectedDomain.id || state.editingRuleZoneId;
-  const saveBtn = document.getElementById('saveBtn');
-  const originalSaveHtml = saveBtn.innerHTML;
-  state.savingRule = true;
-  saveBtn.disabled = true;
-  saveBtn.innerHTML = '<span class="material-icons">hourglass_empty</span> Saving...';
+  if (state.domainsLoading) {
+    setCreateError('Daftar domain sedang dimuat.');
+    return;
+  }
+  if (state.domainsError) {
+    setCreateError('Gagal memuat domain.');
+    return;
+  }
+  const domain = getSelectedCreateDomain();
+  if (!domain) {
+    setCreateError('Pilih domain yang valid.');
+    return;
+  }
+  setCreateLoading(true);
   try {
-    if (state.editingRuleId) {
-      await api(`/api/rules/${encodeURIComponent(state.editingRuleId)}`, {
-        method: 'PUT',
-        body: JSON.stringify({ customEmail: fromEmail, destinationId: toEmail, type: ruleType, zoneId: zoneId || null })
-      });
-      showNotification('Rule updated successfully!', 'success');
-    } else {
-      await api('/api/rules', {
+    const workerName = await getInboxWorkerName();
+    const email = `${localPart}@${domain.name}`;
+    await api('/api/rules', {
+      method: 'POST',
+      body: JSON.stringify({
+        customEmail: email,
+        destinationIdManual: workerName,
+        type: 'worker',
+        zoneId: domain.id
+      })
+    });
+    try {
+      await api('/api/addresses', {
         method: 'POST',
-        body: JSON.stringify({ customEmail: fromEmail, destinationIdManual: toEmail, type: ruleType, zoneId: zoneId || null })
+        body: JSON.stringify({ address: email })
       });
-      showNotification('Rule created successfully!', 'success');
+    } catch (e) {
+      console.warn('Failed to persist generated address', e);
     }
-    closeRuleModal();
-    loadRules();
+    addCreatedAddress(email);
+    showNotification('Address created', 'success');
+    nameInput.value = '';
+    await loadInbox(0);
   } catch (e) {
-    showNotification('Save failed: ' + e.message, 'error');
+    setCreateError(e.message);
+    showNotification('Create address failed: ' + e.message, 'error');
   } finally {
-    state.savingRule = false;
-    saveBtn.innerHTML = originalSaveHtml;
-    validateRuleForm();
+    setCreateLoading(false);
   }
 }
 
 async function loadInbox(page = 0) {
   const list = document.getElementById('inbox-list');
   const empty = document.getElementById('inbox-empty');
-  const subtitle = document.getElementById('inbox-subtitle');
-  if (!state.selectedAddress) {
+  const prev = document.getElementById('btn-inbox-prev');
+  const next = document.getElementById('btn-inbox-next');
+  const address = state.latestAddress || '';
+  if (!address) {
     list.innerHTML = '';
     empty.style.display = 'block';
-    empty.textContent = 'Select an address to view messages.';
-    subtitle.textContent = 'Select an address to load messages';
+    empty.textContent = 'Create an address to view messages.';
+    if (prev) prev.disabled = true;
+    if (next) next.disabled = true;
     return;
   }
   empty.style.display = 'none';
   list.innerHTML = '<div class="loading">Loading messages...</div>';
   try {
-    const emails = await api(`/api/inbox?limit=${state.inboxLimit}&offset=${page * state.inboxLimit}&recipient=${encodeURIComponent(state.selectedAddress)}`);
-    state.inbox = emails;
+    const recipients = encodeURIComponent(address);
+    const emails = await api(`/api/inbox?limit=${state.inboxLimit}&offset=${page * state.inboxLimit}&recipients=${recipients}`);
+    state.inbox = Array.isArray(emails) ? emails : [];
     state.inboxPage = page;
-    if (emails && emails.length) {
-      const latest = Math.max(...emails.map((email) => new Date(email.created_at || 0).getTime()));
-      if (Number.isFinite(latest) && latest > 0) {
-        setAddressActivity(state.selectedAddress, latest);
-        state.addresses.forEach((item) => {
-          if (item.address.toLowerCase() === state.selectedAddress.toLowerCase()) {
-            item.lastActivity = latest;
-          }
-        });
-        updateAddressSortAvailability();
-        renderAddressList();
-      }
-    }
     renderInbox();
-    document.getElementById('btn-inbox-prev').disabled = state.inboxPage === 0;
-    document.getElementById('btn-inbox-next').disabled = emails.length < state.inboxLimit;
-    subtitle.textContent = `Viewing ${state.selectedAddress}`;
+    if (prev) prev.disabled = state.inboxPage === 0;
+    if (next) next.disabled = state.inbox.length < state.inboxLimit;
   } catch (e) {
     list.innerHTML = '';
     const errorEl = document.createElement('div');
@@ -1449,7 +815,7 @@ function renderInbox() {
     const displayName = senderInfo.label || 'Unknown sender';
     const fromEmail = senderInfo.email || email.sender || 'Unknown';
     const domain = senderInfo.domain || (fromEmail.includes('@') ? fromEmail.split('@')[1] : 'unknown');
-    const toLabel = email.recipient || state.selectedAddress || '-';
+    const toLabel = email.recipient || '-';
     const el = document.createElement('div');
     el.className = 'inbox-item list-item';
     el.style.animationDelay = `${Math.min(index, 10) * 30}ms`;
@@ -1504,8 +870,8 @@ function closeEmailViewer() {
 function wrapEmailHtml(html) {
   const content = String(html || '').trim();
   if (!content) return '';
-  const baseStyle = 'img{max-width:100%!important;height:auto!important}table{max-width:100%}body{margin:0;padding:12px;background:#ffffff;color:#1a1a2e;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.5;word-break:break-word}a{color:#2563eb}';
-  // Full HTML document — inject styles without nesting another document
+  const baseStyle = 'img{max-width:100%!important;height:auto!important}table{max-width:100%}body{margin:0;padding:12px;background:#ffffff;color:#1a1a2e;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.5;word-break:break-word}a{color:#277da1}';
+  // Full HTML document - inject styles without nesting another document
   if (/^<!DOCTYPE/i.test(content) || /<html[\s>]/i.test(content)) {
     if (/<\/head>/i.test(content)) {
       return content.replace(/<\/head>/i, `<style>${baseStyle}</style></head>`);
@@ -1515,7 +881,7 @@ function wrapEmailHtml(html) {
     }
     return content;
   }
-  // HTML fragment — wrap in minimal document with light email-safe defaults
+  // HTML fragment - wrap in minimal document with light email-safe defaults
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${baseStyle}</style></head><body>${content}</body></html>`;
 }
 
@@ -1592,28 +958,17 @@ async function deleteEmail() {
 async function handleLogout() {
   try { await fetch('/api/logout', { method: 'POST', credentials: 'include' }); } catch {}
   csrfToken = null;
-  localStorage.removeItem('selectedAddress');
-  state.rules = [];
-  state.ruleMap = new Map();
-  state.addresses = [];
-  state.selectedAddress = null;
   state.inbox = [];
   state.inboxPage = 0;
   state.currentEmailId = null;
   state.currentEmailData = null;
   sessionOk = false;
-  const addressList = document.getElementById('address-list');
-  if (addressList) addressList.innerHTML = '';
-  const addressEmpty = document.getElementById('address-empty');
-  if (addressEmpty) addressEmpty.style.display = 'block';
   const inboxList = document.getElementById('inbox-list');
   if (inboxList) inboxList.innerHTML = '';
   const inboxEmpty = document.getElementById('inbox-empty');
-  if (inboxEmpty) { inboxEmpty.style.display = 'block'; inboxEmpty.textContent = 'Select an address to view messages.'; }
-  const subtitle = document.getElementById('inbox-subtitle');
-  if (subtitle) subtitle.textContent = 'Select an address to load messages';
+  if (inboxEmpty) { inboxEmpty.style.display = 'block'; inboxEmpty.textContent = 'Create an address to view messages.'; }
   closeEmailViewer();
-  showLogin();
+  window.location.href = '/login';
 }
 
 // Element SDK configuration (optional)
@@ -1657,49 +1012,52 @@ document.addEventListener('DOMContentLoaded', async function () {
     });
   }
 
-  const sidebarHandle = document.getElementById('sidebarHandle');
-  if (sidebarHandle) sidebarHandle.addEventListener('click', toggleSidebar);
+  const sidebarToggle = document.getElementById('sidebarToggle');
+  if (sidebarToggle) sidebarToggle.addEventListener('click', toggleSidebar);
+  const sidebarClose = document.getElementById('sidebarClose');
+  if (sidebarClose) sidebarClose.addEventListener('click', () => setSidebarState('collapsed', { focusToggle: true }));
   const sidebarOverlay = document.getElementById('sidebarOverlay');
-  if (sidebarOverlay) sidebarOverlay.addEventListener('click', () => setSidebarState('collapsed'));
-  const savedState = localStorage.getItem(SIDEBAR_STATE_KEY);
+  if (sidebarOverlay) sidebarOverlay.addEventListener('click', () => setSidebarState('collapsed', { focusToggle: true }));
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && isSidebarOpen()) {
+      setSidebarState('collapsed', { focusToggle: true });
+    }
+  });
+  let savedState = null;
+  try {
+    savedState = localStorage.getItem(SIDEBAR_STATE_KEY);
+  } catch {}
   if (savedState === 'open' || savedState === 'collapsed') setSidebarState(savedState);
-  else { const legacy = localStorage.getItem('sidebarCollapsed'); setSidebarState(legacy === '1' ? 'collapsed' : 'collapsed'); }
+  else setSidebarState('collapsed');
 
-  state.addressActivity = loadAddressActivity();
+  state.createdAddresses = loadCreatedAddresses();
+  state.latestAddress = state.createdAddresses[state.createdAddresses.length - 1] || null;
+  renderViewingPanel();
 
-  const loginForm = document.getElementById('loginForm');
-  if (loginForm) loginForm.addEventListener('submit', handleLogin);
-
-  const setupPasswordForm = document.getElementById('setupPasswordForm');
-  if (setupPasswordForm) setupPasswordForm.addEventListener('submit', handleSetupPassword);
-
-  // Check if password is configured
+  // Auth gate — pengguna tanpa session dialihkan ke halaman /login
   let authStatus = null;
   try {
     const res = await fetch('/api/auth-status');
     if (res.ok) authStatus = await res.json();
   } catch {}
 
-  const passwordConfigured = authStatus && authStatus.passwordEnabled;
-  totpEnabled = !!(authStatus && authStatus.totpEnabled);
+  passwordConfigured = !!(authStatus && authStatus.passwordEnabled);
 
   if (passwordConfigured) {
     const ok = await checkSession();
     if (ok) {
-      hideLogin();
-      await loadRules();
+      await loadLatestGeneratedAddress();
+      await loadDomains();
       showView();
+      loadInbox(0);
     } else {
-      setAuthNotice('');
-      showLogin();
+      window.location.href = '/login';
+      return;
     }
-  } else if (totpEnabled) {
-    hideLogin();
-    showSetupPassword();
-    setSetupNotice('Panel menggunakan 2FA. Isi TOTP_SECRET di environment deploy, lalu login dengan kode authenticator.', 'warning');
   } else {
-    hideLogin();
-    showSetupPassword();
+    // Password belum dikonfigurasi → arahkan ke halaman /login (mode setup)
+    window.location.href = '/login';
+    return;
   }
 
   const settingsForm = document.getElementById('settingsForm');
@@ -1707,14 +1065,6 @@ document.addEventListener('DOMContentLoaded', async function () {
     settingsForm.addEventListener('submit', saveSettings);
     settingsForm.addEventListener('click', handleSettingsAction);
   }
-
-  await loadTotpStatus();
-  const btnTotpSetup = document.getElementById('btn-totp-setup');
-  if (btnTotpSetup) btnTotpSetup.addEventListener('click', setupTotp);
-  const btnTotpActivate = document.getElementById('btn-totp-activate');
-  if (btnTotpActivate) btnTotpActivate.addEventListener('click', activateTotp);
-  const btnTotpDisable = document.getElementById('btn-totp-disable');
-  if (btnTotpDisable) btnTotpDisable.addEventListener('click', disableTotp);
 
   const tokenInput = document.getElementById('cfgApiToken');
   if (tokenInput) tokenInput.addEventListener('input', updateTokenToggleVisibility);
@@ -1730,49 +1080,25 @@ document.addEventListener('DOMContentLoaded', async function () {
   const diagBtn = document.getElementById('btn-diagnostics');
   if (diagBtn) diagBtn.addEventListener('click', () => runDiagnostics(diagBtn));
 
-  const addRuleBtn = document.getElementById('btn-add-rule');
-  if (addRuleBtn) addRuleBtn.addEventListener('click', () => { showAddRuleDialog(); });
-
-  document.getElementById('btn-modal-close')?.addEventListener('click', closeRuleModal);
-  document.getElementById('btn-cancel')?.addEventListener('click', closeRuleModal);
-  document.getElementById('ruleForm')?.addEventListener('submit', saveRule);
-
-  document.getElementById('fromLocalPart')?.addEventListener('input', () => { updateFromPreview(); validateRuleForm(); });
-  document.getElementById('btn-generate-email-name')?.addEventListener('click', generateEmailName);
-  document.getElementById('fromDomain')?.addEventListener('change', () => { updateFromPreview(); validateRuleForm(); });
-  document.getElementById('toEmail')?.addEventListener('input', validateRuleForm);
-  document.getElementById('workerSelect')?.addEventListener('change', validateRuleForm);
-  document.getElementById('ruleType')?.addEventListener('change', () => { updateRuleTypeUI(); validateRuleForm(); });
-
-  const domainFilter = document.getElementById('domainFilter');
-  if (domainFilter) domainFilter.addEventListener('change', renderAddressList);
-
-  const addressSearch = document.getElementById('addressSearch');
-  if (addressSearch) addressSearch.addEventListener('input', renderAddressList);
-  const addressSort = document.getElementById('addressSort');
-  if (addressSort) {
-    const savedSort = localStorage.getItem(ADDRESS_SORT_KEY);
-    if (savedSort) addressSort.value = savedSort;
-    addressSort.addEventListener('change', () => { localStorage.setItem(ADDRESS_SORT_KEY, addressSort.value); renderAddressList(); });
+  document.getElementById('createAddressForm')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    handleCreateAddress(false);
+  });
+  document.getElementById('btn-random-name')?.addEventListener('click', generateCreateName);
+  document.getElementById('btn-create-random')?.addEventListener('click', () => handleCreateAddress(true));
+  document.getElementById('createName')?.addEventListener('input', () => setCreateError(''));
+  document.getElementById('createDomain')?.addEventListener('change', () => setCreateError(''));
+  const nameStyleSelect = document.getElementById('nameStyle');
+  if (nameStyleSelect) {
+    const savedStyle = localStorage.getItem('nameStyle');
+    if (savedStyle === 'id' || savedStyle === 'us') nameStyleSelect.value = savedStyle;
+    nameStyleSelect.addEventListener('change', () => localStorage.setItem('nameStyle', nameStyleSelect.value));
   }
 
-  document.getElementById('address-list')?.addEventListener('click', (e) => {
-    const actionBtn = e.target.closest('button[data-action]');
-    if (actionBtn) {
-      const item = actionBtn.closest('.address-item');
-      if (!item) return;
-      const ruleId = item.dataset.id;
-      const zoneId = item.dataset.zone || null;
-      const action = actionBtn.dataset.action;
-      if (action === 'copy') { copyAddress(item.dataset.address); return; }
-      if (action === 'toggle') return handleAddressToggle(ruleId, zoneId);
-      if (action === 'edit') { const rule = state.ruleMap.get(getRuleMapKey(ruleId, zoneId)); if (rule) populateEditRule(rule); return; }
-      if (action === 'delete') return handleAddressDelete(ruleId, zoneId);
-      return;
-    }
-    const item = e.target.closest('.address-item');
-    if (!item) return;
-    setSelectedAddress(item.dataset.address);
+  document.getElementById('viewingList')?.addEventListener('click', (event) => {
+    const copyBtn = event.target.closest('[data-copy-address]');
+    if (!copyBtn) return;
+    copyToClipboard(copyBtn.dataset.copyAddress, 'Email disalin', 'Gagal menyalin');
   });
 
   document.getElementById('btn-refresh-inbox')?.addEventListener('click', () => loadInbox(state.inboxPage));
@@ -1798,7 +1124,4 @@ document.addEventListener('DOMContentLoaded', async function () {
   if (window.elementSdk) {
     window.elementSdk.init({ defaultConfig, onConfigChange, mapToCapabilities, mapToEditPanelValues });
   }
-
-  // Load stored address if available and session is active
-  restoreSelectedAddress();
 });

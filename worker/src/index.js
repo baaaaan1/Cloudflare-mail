@@ -1,5 +1,13 @@
 import PostalMime from 'postal-mime';
 
+const RETENTION_DAYS = 7;
+
+async function deleteExpiredAddresses(env) {
+  await env.DB.prepare(
+    `DELETE FROM generated_addresses WHERE created_at <= datetime('now', ?)`
+  ).bind(`-${RETENTION_DAYS} days`).run();
+}
+
 export default {
   async email(message, env, ctx) {
     try {
@@ -20,5 +28,13 @@ export default {
     } catch (e) {
       console.error('Error processing email', e);
     }
+  },
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(
+      deleteExpiredAddresses(env).catch((e) => {
+        console.error('Error cleaning up generated addresses', e);
+      })
+    );
   }
 }
