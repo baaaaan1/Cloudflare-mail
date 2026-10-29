@@ -33,6 +33,7 @@
 - [Development](#development)
 - [Operations and troubleshooting](#operations-and-troubleshooting)
 - [Contributing](#contributing)
+- [Support my work](#support-my-work)
 - [License](#license)
 
 ## Highlights
@@ -567,6 +568,20 @@ git checkout -b feature/your-feature
 git commit -m "feat: describe the change"
 git push origin feature/your-feature
 ```
+
+## Support my work
+
+If this project has been useful to you, you can support its development through
+[tako.id/Baaaaan1](https://tako.id/Baaaaan1). Tips help fund hardware prototypes,
+components, testing, and future open-source projects.
+
+<p align="center">
+  <a href="https://tako.id/Baaaaan1">
+    <img src="docs/assets/qr-code.svg" alt="QR code for tako.id/Baaaaan1" width="160" height="160" />
+  </a>
+  <br />
+  <sub>Scan the QR code or visit <a href="https://tako.id/Baaaaan1">tako.id/Baaaaan1</a>.</sub>
+</p>
 
 ## License
 
