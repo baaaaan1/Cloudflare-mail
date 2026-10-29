@@ -184,6 +184,13 @@ sudo chmod 600 .env
 Docker Compose and Cloudflare provisioning, so routine maintenance does not require raw
 compose commands.
 
+Clone the repository first, then run the CLI from its root:
+
+```bash
+git clone https://github.com/baaaaan1/Cloudflare-mail.git
+cd Cloudflare-mail
+```
+
 ```bash
 sudo bash scripts/cliui.sh              # interactive menu
 sudo bash scripts/cliui.sh install      # Docker + .env + build + start
