@@ -1,4 +1,17 @@
-{$DOMAIN:mail.ayaneo.my.id} {
+{
+	# No local admin API: config is managed only through this Caddyfile.
+	admin off
+
+	servers {
+		timeouts {
+			read_header 10s
+			idle 120s
+		}
+	}
+}
+
+# DOMAIN is injected by docker-compose.yml; the fallback is only an example.
+{$DOMAIN:mail.example.com} {
 	encode zstd gzip
 
 	header {
@@ -8,6 +21,11 @@
 		Referrer-Policy "no-referrer"
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 		-server
+	}
+
+	# The app only accepts small JSON/form bodies (200 KB limit in Express).
+	request_body {
+		max_size 1MB
 	}
 
 	reverse_proxy panel:3000

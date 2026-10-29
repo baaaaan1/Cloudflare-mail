@@ -47,4 +47,4 @@ if [[ "${DEPLOY_WORKER}" == "true" ]]; then
 fi
 
 DOMAIN="$(grep -E '^CADDY_DOMAIN=' .env | sed -E 's/^CADDY_DOMAIN=//' || true)"
-echo "Done. Panel should be running on https://${DOMAIN:-mail.ayaneo.my.id}"
+echo "Done. Panel should be running on https://${DOMAIN:-mail.example.com}"

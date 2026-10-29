@@ -1,21 +1,41 @@
-# Node
+# Dependencies
 node_modules/
 
-# Environment files
+# Environment files (keep the template)
 .env
-.env.local
-.env.*.local
-.register-request.json
-worker/wrangler.toml
+.env.*
+!.env.example
 
-# Docker runtime data
+# Local registration/secrets
+.register-request.json
+
+# Cloudflare Worker local config and cache
+worker/wrangler.toml
+.wrangler/
+worker/.wrangler/
+
+# Local runtime data (auth secret, API-key hashes, Docker volumes)
+data/
+data-test/
 caddy_data/
 caddy_config/
 
+# Build output
+ui/dist/
+*.tsbuildinfo
+
 # Logs
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Local tooling and editor state
+.agents/
+.vscode/
+.idea/
+skills-lock.json
+
 # System
 .DS_Store
+Thumbs.db

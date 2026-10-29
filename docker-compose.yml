@@ -1,18 +1,29 @@
 services:
   panel:
     build: .
+    image: cf-email-panel:latest
     container_name: cf-email-panel
     restart: unless-stopped
     init: true
     user: "1000:1000"
+    read_only: true
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 200
+    stop_grace_period: 10s
     env_file:
       - .env
     environment:
       NODE_ENV: production
+      PORT: "3000"
+      DATA_DIR: /app/data
     volumes:
       - ./.env:/app/.env
+      - auth_data:/app/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
     expose:
       - "3000"
     healthcheck:
@@ -21,11 +32,26 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   caddy:
     image: caddy:2.8-alpine
     container_name: cf-email-caddy
     restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    pids_limit: 200
+    stop_grace_period: 10s
     depends_on:
       panel:
         condition: service_healthy
@@ -33,12 +59,21 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      DOMAIN: ${CADDY_DOMAIN:-mail.ayaneo.my.id}
+      # Example fallback only — set CADDY_DOMAIN in .env for real deployments.
+      DOMAIN: ${CADDY_DOMAIN:-mail.example.com}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   caddy_data:
   caddy_config:
+  auth_data:

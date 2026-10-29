@@ -8,30 +8,46 @@
 #   - No `./.env:/app/.env` bind mount: set every variable in Dokploy UI →
 #     "Environment" tab. Dokploy writes them to `.env` next to this compose file,
 #     and `env_file: .env` injects them into the container. Do NOT use the in-panel
-#     setup-password/Save Settings to write .env (the container runs as non-root UID
-#     1000 and Dokploy regenerates .env on each deploy).
+#     Save Settings to write .env: the container runs as non-root UID 1000 with a
+#     read-only root filesystem, and Dokploy regenerates .env on each deploy.
 #
 # Steps in Dokploy:
 #   1. Create a "Docker Compose" service, source = GitHub (this repo).
 #   2. In "General" set the compose file path to: docker-compose.dokploy.yml
-#   3. In "Environment" add: PASSWORD, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
-#      CLOUDFLARE_D1_DATABASE_ID, ADMIN_API_TOKEN, PORT.
-#      PASSWORD is your plain login password — PASSWORD_SALT/PASSWORD_HASH are
-#      generated automatically at startup (or set both explicitly to skip this).
+#   3. In "Environment" add: APP_PASSWORD, CLOUDFLARE_API_TOKEN,
+#      CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_D1_DATABASE_ID.
+#      APP_PASSWORD is the panel login password (ADMIN_PASSWORD is a legacy
+#      fallback). AUTH_SECRET is optional: if omitted, a signing secret is
+#      generated once and stored under DATA_DIR, so persist that volume.
 #   4. In "Domains" add your domain → Dokploy routes + issues TLS automatically.
+#
+# DATA_DIR and PORT are fixed below to match the mounted volume and the internal
+# port Dokploy routes to; do not override them.
 
 services:
   panel:
     build: .
+    image: cf-email-panel:latest
     restart: unless-stopped
     init: true
     user: "1000:1000"
+    read_only: true
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 200
+    stop_grace_period: 10s
+    volumes:
+      - auth_data:/app/data
     env_file:
       - .env
     environment:
       NODE_ENV: production
+      PORT: "3000"
+      DATA_DIR: /app/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
     expose:
       - "3000"
     healthcheck:
@@ -40,3 +56,13 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # (session secret and hashed API keys persist under DATA_DIR;
+    #  inbox data lives in Cloudflare D1 — no external database service)
+
+volumes:
+  auth_data:

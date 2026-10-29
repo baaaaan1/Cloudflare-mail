@@ -8,24 +8,28 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const speakeasy = require('speakeasy');
-const QRCode = require('qrcode');
 require('dotenv').config();
+
+const auth = require('./lib/auth');
+const apiKeys = require('./lib/apiKeys');
+
 
 const app = express();
 app.disable('x-powered-by');
 // Caddy terminates TLS and forwards the original client address/protocol.
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '200kb' }));
+
+// ── Security headers (applied to ALL responses, incl. login/logout) ─────
 app.use((req, res, next) => {
   const csp = [
     "default-src 'self'",
-    "script-src 'self'",
+    "script-src 'self' https://challenges.cloudflare.com",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: https:",
-    "connect-src 'self'",
-    "frame-src 'self'",
+    "connect-src 'self' https://challenges.cloudflare.com",
+    "frame-src 'self' https://challenges.cloudflare.com",
     "base-uri 'self'",
     "form-action 'self'",
   ].join('; ');
@@ -40,6 +44,196 @@ app.use((req, res, next) => {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
   }
   next();
+});
+
+// ── CORS for the REST API (API-key callers, no cookies) ────────────────
+app.use('/api', (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-API-Key');
+  res.setHeader('Access-Control-Expose-Headers', 'Retry-After');
+  res.setHeader('Access-Control-Max-Age', '600');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  return next();
+});
+
+// ── Turnstile captcha (toggle from .env) ───────────────────────────────
+const TURNSTILE_VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
+
+function turnstileConfig() {
+  const flag = String(process.env.TURNSTILE_ENABLED || '').trim().toLowerCase();
+  const requested = ['1', 'true', 'yes', 'on'].includes(flag);
+  const siteKey = String(process.env.TURNSTILE_SITE_KEY || '').trim();
+  const secretKey = String(process.env.TURNSTILE_SECRET_KEY || '').trim();
+  const enabled = requested && Boolean(siteKey) && Boolean(secretKey);
+  return { requested, enabled, siteKey: enabled ? siteKey : '', secretKey, misconfigured: requested && !enabled };
+}
+
+async function verifyTurnstile(token, ip) {
+  const { enabled, secretKey } = turnstileConfig();
+  if (!enabled) return true;
+  if (!token || typeof token !== 'string') return false;
+  try {
+    const body = new URLSearchParams({ secret: secretKey, response: token });
+    if (ip && ip !== 'unknown') body.set('remoteip', ip);
+    const response = await fetch(TURNSTILE_VERIFY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+      signal: AbortSignal.timeout(8000),
+    });
+    const data = await response.json();
+    return Boolean(data && data.success);
+  } catch (error) {
+    console.warn('[SECURITY] Turnstile verification failed: ' + (error && error.message));
+    return false;
+  }
+}
+
+// ── Rate limiting & brute force protection (fail2ban style) ─────────────
+const loginAttempts = new Map(); // ip -> { fails, blockCount, lastFail, blockedUntil, rateTs, rateCount }
+const MAX_FAILS = 5; // max failed attempts before block
+const BASE_BLOCK_MS = 15 * 60 * 1000; // first block: 15 minutes
+const MAX_BLOCK_MS = 24 * 60 * 60 * 1000; // escalating cap: 24 hours
+const ATTEMPT_TTL_MS = 24 * 60 * 60 * 1000; // forget an IP after a day of inactivity
+const RATE_WINDOW = 60 * 1000; // 1 minute sliding window
+const RATE_MAX = 5; // max login attempts per minute per IP
+const FAIL_DELAY_MS = 350; // extra latency on failures to slow automation
+
+function getClientIp(req) {
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function blockRemainingMs(ip) {
+  const entry = loginAttempts.get(ip);
+  if (!entry || !entry.blockedUntil) return 0;
+  const remaining = entry.blockedUntil - Date.now();
+  return remaining > 0 ? remaining : 0;
+}
+
+function isLoginBlocked(ip) {
+  const entry = loginAttempts.get(ip);
+  if (!entry || !entry.blockedUntil) return false;
+  if (Date.now() <= entry.blockedUntil) return true;
+  // Block expired: let them try again, but keep escalation history for a day.
+  entry.blockedUntil = 0;
+  entry.fails = 0;
+  return false;
+}
+
+function recordFailedLogin(ip) {
+  const entry = loginAttempts.get(ip) || {
+    fails: 0,
+    blockCount: 0,
+    rateTs: Date.now(),
+    rateCount: 0,
+  };
+  entry.fails = (entry.fails || 0) + 1;
+  entry.lastFail = Date.now();
+  if (entry.fails >= MAX_FAILS) {
+    entry.blockCount = (entry.blockCount || 0) + 1;
+    const blockMs = Math.min(BASE_BLOCK_MS * 2 ** (entry.blockCount - 1), MAX_BLOCK_MS);
+    entry.blockedUntil = Date.now() + blockMs;
+    entry.fails = 0;
+    const minutes = Math.round(blockMs / 60000);
+    console.warn(`[SECURITY] IP ${ip} diblok — terlalu banyak login gagal. Block ${minutes} menit (level ${entry.blockCount}).`);
+  } else {
+    console.warn(`[SECURITY] Login gagal dari ${ip} — percobaan ${entry.fails}/${MAX_FAILS}.`);
+  }
+  loginAttempts.set(ip, entry);
+}
+
+function resetLoginAttempts(ip) {
+  loginAttempts.delete(ip);
+}
+
+function checkLoginRate(ip) {
+  const now = Date.now();
+  const entry = loginAttempts.get(ip) || { fails: 0, rateTs: now, rateCount: 0 };
+  if (now - entry.rateTs > RATE_WINDOW) {
+    entry.rateTs = now;
+    entry.rateCount = 1;
+  } else {
+    entry.rateCount++;
+  }
+  loginAttempts.set(ip, entry);
+  return entry.rateCount <= RATE_MAX;
+}
+
+function failureDelay() {
+  return new Promise((resolve) => setTimeout(resolve, FAIL_DELAY_MS + Math.floor(Math.random() * 250)));
+}
+
+// Periodic cleanup to avoid an unbounded map.
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of loginAttempts) {
+    const last = Math.max(entry.lastFail || 0, entry.blockedUntil || 0, entry.rateTs || 0);
+    if (now - last > ATTEMPT_TTL_MS) loginAttempts.delete(ip);
+  }
+}, 10 * 60 * 1000).unref();
+
+if (turnstileConfig().misconfigured) {
+  console.warn('[WARN] TURNSTILE_ENABLED aktif tetapi TURNSTILE_SITE_KEY / TURNSTILE_SECRET_KEY belum lengkap. Captcha dimatikan.');
+}
+
+// ── Simple password auth (login / logout) ───────────────────────────────
+app.post('/api/auth/login', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const ip = getClientIp(req);
+
+  // 1. Check if IP is blocked (fail2ban)
+  if (isLoginBlocked(ip)) {
+    const remaining = Math.ceil(blockRemainingMs(ip) / 1000 / 60);
+    res.setHeader('Retry-After', String(Math.max(1, Math.ceil(blockRemainingMs(ip) / 1000))));
+    return res.status(429).json({
+      error: `Terlalu banyak percobaan gagal. Coba lagi dalam ${Math.max(1, remaining)} menit.`,
+    });
+  }
+
+  // 2. Rate limit: max 5 attempts per minute
+  if (!checkLoginRate(ip)) {
+    res.setHeader('Retry-After', '60');
+    return res.status(429).json({
+      error: 'Terlalu cepat. Tunggu sebentar sebelum mencoba lagi.',
+    });
+  }
+
+  try {
+    // 3. Turnstile (optional, enabled via .env)
+    const turnstile = turnstileConfig();
+    if (turnstile.enabled) {
+      const captchaToken = String(req.body?.turnstileToken || '');
+      if (!captchaToken) {
+        return res.status(400).json({ error: 'Captcha token required.' });
+      }
+      const captchaOk = await verifyTurnstile(captchaToken, ip);
+      if (!captchaOk) {
+        recordFailedLogin(ip);
+        await failureDelay();
+        return res.status(400).json({ error: 'Captcha verification failed. Please retry.' });
+      }
+    }
+
+    const password = String(req.body?.password || '');
+    const token = await auth.login(password);
+    if (!token) {
+      recordFailedLogin(ip);
+      await failureDelay();
+      return res.status(401).json({ error: 'Password salah.' });
+    }
+    resetLoginAttempts(ip);
+    res.cookie(auth.SESSION_COOKIE, token, auth.getCookieOptions(req));
+    logAudit('login', 'user:admin', { ip });
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'Login error' });
+  }
+});
+
+app.post('/api/auth/logout', (_req, res) => {
+  res.clearCookie(auth.SESSION_COOKIE, { path: '/' });
+  res.json({ ok: true });
 });
 app.use((req, _res, next) => {
   try { console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`); } catch {} finally { next(); }
@@ -65,159 +259,9 @@ function updateCfToken() {
   cf.defaults.headers['Authorization'] = `Bearer ${process.env.CLOUDFLARE_API_TOKEN || ''}`;
 }
 
-// ── Auth (Password only) ───────────────────────────────────────────────
-const PASSWORD_SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 jam
-const PASSWORD_SESSION_IDLE_MS = 30 * 60 * 1000; // idle timeout saat tidak ada aktivitas
-const passwordSessions = new Map(); // hashedSessionId -> { expiresAt, idleAt, csrfToken }
-
-function getPasswordHash() {
-  const v = process.env.PASSWORD_HASH;
-  return v && v.trim() ? v.trim() : null;
-}
-function getPasswordSalt() {
-  const v = process.env.PASSWORD_SALT;
-  return v && v.trim() ? v.trim() : null;
-}
-function isPasswordConfigured() {
-  return !!(getPasswordHash() && getPasswordSalt());
-}
-
-function decodePasswordHash(value) {
-  if (!value) return null;
-  const trimmed = String(value).trim();
-  if (!trimmed) return null;
-  if (/^[0-9a-f]+$/i.test(trimmed) && trimmed.length % 2 === 0) {
-    return Buffer.from(trimmed, 'hex');
-  }
-  try { return Buffer.from(trimmed, 'base64'); } catch { return null; }
-}
-
-function verifyPasswordInput(password) {
-  const hashValue = getPasswordHash();
-  const saltValue = getPasswordSalt();
-  if (!hashValue || !saltValue) return false;
-  const storedHash = decodePasswordHash(hashValue);
-  if (!storedHash || !storedHash.length) return false;
-  try {
-    const derived = crypto.scryptSync(String(password || ''), String(saltValue), storedHash.length);
-    return crypto.timingSafeEqual(derived, storedHash);
-  } catch { return false; }
-}
-
-// Auto-generate PASSWORD_SALT/PASSWORD_HASH from a plain PASSWORD env var
-// (e.g. set via Dokploy Environment). A fresh random salt is derived on every
-// boot together with its hash, so no persistence is needed. Explicit
-// PASSWORD_HASH/PASSWORD_SALT always take precedence.
-(function deriveCredentialsFromPlainPassword() {
-  const plain = process.env.PASSWORD;
-  const trimmed = plain && String(plain).trim();
-  if (!trimmed) return;
-  if (getPasswordHash() && getPasswordSalt()) return;
-  if (trimmed.length < 8) {
-    console.warn('[WARN] PASSWORD is shorter than 8 characters.');
-  }
-  const salt = crypto.randomBytes(16).toString('hex');
-  process.env.PASSWORD_SALT = salt;
-  process.env.PASSWORD_HASH = crypto.scryptSync(trimmed, salt, 64).toString('hex');
-  console.log('[INFO] PASSWORD detected: PASSWORD_SALT/PASSWORD_HASH generated at startup.');
-})();
-
-function safeEqual(a, b) {
-  const left = Buffer.from(String(a || ''));
-  const right = Buffer.from(String(b || ''));
-  if (!left.length || left.length !== right.length) return false;
-  return crypto.timingSafeEqual(left, right);
-}
-
-function hashSessionId(id) {
-  return crypto.createHash('sha256').update(String(id)).digest('hex');
-}
-
-function createSession() {
-  const raw = crypto.randomBytes(32).toString('base64url');
-  const key = hashSessionId(raw);
-  const now = Date.now();
-  const session = {
-    expiresAt: now + PASSWORD_SESSION_TTL_MS,
-    idleAt: now,
-    csrfToken: crypto.randomBytes(24).toString('hex'),
-  };
-  passwordSessions.set(key, session);
-  return { raw, key, ...session };
-}
-
-function getSession(rawId) {
-  if (!rawId) return null;
-  const key = hashSessionId(rawId);
-  const session = passwordSessions.get(key);
-  if (!session) return null;
-  const now = Date.now();
-  if (now > session.expiresAt || now > session.idleAt + PASSWORD_SESSION_IDLE_MS) {
-    passwordSessions.delete(key);
-    return null;
-  }
-  session.idleAt = now; // sliding idle window
-  return session;
-}
-
-function deleteSession(rawId) {
-  if (!rawId) return false;
-  return passwordSessions.delete(hashSessionId(rawId));
-}
-
-function cleanupSessions() {
-  const now = Date.now();
-  for (const [key, session] of passwordSessions) {
-    if (now > session.expiresAt || now > session.idleAt + PASSWORD_SESSION_IDLE_MS) {
-      passwordSessions.delete(key);
-    }
-  }
-}
-
-// ── Admin API token (for scripts / external automation) ────────────────
 function getAdminApiToken() {
   const v = process.env.ADMIN_API_TOKEN;
   return v && v.trim() ? v.trim() : null;
-}
-
-function extractBearerToken(req) {
-  const auth = req.get('Authorization');
-  if (auth && /^Bearer\s+/i.test(auth)) return auth.replace(/^Bearer\s+/i, '').trim();
-  const key = req.get('X-API-Key');
-  if (key) return String(key).trim();
-  return null;
-}
-
-function verifyApiToken(req) {
-  const expected = getAdminApiToken();
-  if (!expected) return false;
-  const provided = extractBearerToken(req);
-  if (!provided) return false;
-  return safeEqual(provided, expected);
-}
-
-// ── Two-factor auth (TOTP) ─────────────────────────────────────────────
-function getTotpSecret() {
-  const v = process.env.TOTP_SECRET;
-  if (!v || !v.trim()) return null;
-  return v.trim().replace(/\s+/g, '').toUpperCase();
-}
-
-function verifyTotpCode(secret, token) {
-  if (!secret || !token) return false;
-  try {
-    return !!speakeasy.totp.verify({ secret, encoding: 'base32', token, window: 1 });
-  } catch { return false; }
-}
-
-function writeEnvKey(key, val) {
-  const envPath = path.join(__dirname, '.env');
-  let content = '';
-  if (fs.existsSync(envPath)) content = fs.readFileSync(envPath, 'utf8');
-  const regex = new RegExp(`^${key}=.*`, 'm');
-  if (regex.test(content)) content = content.replace(regex, `${key}=${val}`);
-  else content += `\n${key}=${val}`;
-  fs.writeFileSync(envPath, content.trim() + '\n');
 }
 
 // ── Cache ──────────────────────────────────────────────────────────────
@@ -228,128 +272,6 @@ const workerCache = { data: null, expiresAt: 0 };
 
 function resetDomainCache() { domainCache.data = null; domainCache.expiresAt = 0; }
 function resetWorkerCache() { workerCache.data = null; workerCache.expiresAt = 0; }
-
-// ── Cookie helpers ─────────────────────────────────────────────────────
-const COOKIE_PASSWORD_SESSION_ID = 'pwd_session_id';
-
-function parseCookies(header) {
-  const cookies = {};
-  if (!header) return cookies;
-  header.split(';').forEach((part) => {
-    const [rawKey, ...rest] = part.trim().split('=');
-    if (!rawKey) return;
-    cookies[rawKey] = decodeURIComponent(rest.join('='));
-  });
-  return cookies;
-}
-
-function serializeCookie(name, value, options = {}) {
-  const segments = [`${name}=${encodeURIComponent(value)}`];
-  if (options.maxAge !== undefined) segments.push(`Max-Age=${Math.max(0, Math.floor(options.maxAge / 1000))}`);
-  if (options.path) segments.push(`Path=${options.path}`);
-  if (options.httpOnly) segments.push('HttpOnly');
-  if (options.sameSite) segments.push(`SameSite=${options.sameSite}`);
-  if (options.secure) segments.push('Secure');
-  return segments.join('; ');
-}
-
-function appendSetCookie(res, cookie) {
-  const existing = res.getHeader('Set-Cookie');
-  const next = Array.isArray(existing) ? existing.slice() : (existing ? [existing] : []);
-  next.push(cookie);
-  res.setHeader('Set-Cookie', next);
-}
-
-function getCookieOptions() {
-  return {
-    httpOnly: true,
-    sameSite: 'Strict',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-  };
-}
-
-function setPasswordSessionCookie(res, sessionId, expiresAt) {
-  if (!sessionId) return;
-  const maxAge = expiresAt ? Math.max(0, expiresAt - Date.now()) : PASSWORD_SESSION_TTL_MS;
-  appendSetCookie(res, serializeCookie(COOKIE_PASSWORD_SESSION_ID, sessionId, { ...getCookieOptions(), maxAge }));
-}
-
-function clearAuthCookies(res) {
-  const opts = { ...getCookieOptions(), maxAge: 0 };
-  appendSetCookie(res, serializeCookie(COOKIE_PASSWORD_SESSION_ID, '', opts));
-}
-
-// ── Rate Limiter ───────────────────────────────────────────────────────
-const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
-const RATE_LIMIT_MAX = 10;
-const rateLimitStore = new Map();
-
-function rateLimit(keyPrefix, max = RATE_LIMIT_MAX, windowMs = RATE_LIMIT_WINDOW_MS) {
-  return (req, res, next) => {
-    const key = `${keyPrefix}:${req.ip}`;
-    const now = Date.now();
-    const entry = rateLimitStore.get(key) || { count: 0, start: now };
-    if (now - entry.start > windowMs) { entry.count = 0; entry.start = now; }
-    entry.count += 1;
-    rateLimitStore.set(key, entry);
-    if (entry.count > max) return res.status(429).json({ error: 'Too many requests. Try again later.' });
-    return next();
-  };
-}
-
-// ── Brute-force lockout (per IP, on failed logins) ─────────────────────
-const LOGIN_MAX_ATTEMPTS = 5;
-const LOGIN_LOCK_MS = 15 * 60 * 1000;
-const LOGIN_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
-const loginAttempts = new Map(); // ip -> { count, firstAt, lockedUntil }
-
-function isLoginLocked(ip) {
-  const entry = loginAttempts.get(ip);
-  if (!entry) return false;
-  if (entry.lockedUntil && Date.now() < entry.lockedUntil) return true;
-  if (entry.lockedUntil) loginAttempts.delete(ip);
-  return false;
-}
-function recordFailedLogin(ip) {
-  const now = Date.now();
-  const entry = loginAttempts.get(ip) || { count: 0, firstAt: now, lockedUntil: 0 };
-  if (now - entry.firstAt > LOGIN_ATTEMPT_WINDOW_MS) { entry.count = 0; entry.firstAt = now; entry.lockedUntil = 0; }
-  entry.count += 1;
-  if (entry.count >= LOGIN_MAX_ATTEMPTS) entry.lockedUntil = now + LOGIN_LOCK_MS;
-  loginAttempts.set(ip, entry);
-}
-function clearFailedLogins(ip) { loginAttempts.delete(ip); }
-
-// ── Auth middleware ────────────────────────────────────────────────────
-const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-
-const authMiddleware = (req, res, next) => {
-  if (!isPasswordConfigured()) {
-    return next(); // no password configured? allow access (for setup)
-  }
-  // API token authentication (no CSRF required: bearer secret, not cookie-based)
-  if (verifyApiToken(req)) {
-    return next();
-  }
-  const cookies = parseCookies(req.headers.cookie || '');
-  const rawSessionId = cookies[COOKIE_PASSWORD_SESSION_ID];
-  const session = rawSessionId ? getSession(rawSessionId) : null;
-
-  if (session) {
-    // Cookie-session CSRF protection: mutating requests must carry the session CSRF token
-    if (!SAFE_METHODS.has(req.method)) {
-      const token = req.get('X-CSRF-Token');
-      if (!token || !safeEqual(token, session.csrfToken)) {
-        return res.status(403).json({ error: 'Invalid CSRF token' });
-      }
-    }
-    return next();
-  }
-
-  if (rawSessionId) clearAuthCookies(res);
-  return res.status(401).json({ error: 'Unauthorized. Please login.' });
-};
 
 // ── Config helpers ────────────────────────────────────────────────────
 function getEnvVariable(key) {
@@ -372,76 +294,211 @@ function sanitizeEnvValue(label, value) {
   return { value: text.trim() };
 }
 
-// ── Login endpoint ─────────────────────────────────────────────────────
-app.post('/api/login', rateLimit('login'), (req, res) => {
-  const passwordEnabled = isPasswordConfigured();
-  const totpEnabled = !!getTotpSecret();
-  if (!passwordEnabled && !totpEnabled) {
-    return res.status(400).json({ error: 'Auth not configured. Set PASSWORD (or PASSWORD_HASH + PASSWORD_SALT) and/or TOTP_SECRET.' });
-  }
-  if (isLoginLocked(req.ip)) {
-    return res.status(429).json({ error: 'Terlalu banyak percobaan gagal. Coba lagi nanti.' });
-  }
-
-  const fail = () => {
-    recordFailedLogin(req.ip);
-    return res.status(401).json({ error: 'Invalid credentials' });
+// ── Auth endpoints (Better Auth backed) ─────────────────────────────────
+// Session + auth state for the SPA.
+app.get('/api/auth-status', (req, res) => {
+  const session = auth.getSessionFromReq(req);
+  const passwordEnabled = !!(process.env.APP_PASSWORD || process.env.ADMIN_PASSWORD);
+  const turnstile = turnstileConfig();
+  const body = {
+    authRequired: true,
+    passwordEnabled,
+    turnstileEnabled: turnstile.enabled,
+    turnstileSiteKey: turnstile.siteKey,
   };
-
-  if (passwordEnabled) {
-    const password = String(req.body?.password || '').trim();
-    if (!password) return res.status(400).json({ error: 'Password required' });
-    if (!verifyPasswordInput(password)) return fail();
+  if (session) {
+    return res.json({ ...body, loggedIn: true, role: session.user.role });
   }
-  if (totpEnabled) {
-    const token = String(req.body?.token || '').replace(/[\s-]/g, '');
-    if (!token) return res.status(400).json({ error: '2FA code required' });
-    if (!verifyTotpCode(getTotpSecret(), token)) return fail();
-  }
-
-  clearFailedLogins(req.ip);
-  const session = createSession();
-  clearAuthCookies(res);
-  setPasswordSessionCookie(res, session.raw, session.expiresAt);
-  res.json({ ok: true, sessionId: session.raw, csrfToken: session.csrfToken });
+  return res.json({ ...body, loggedIn: false });
 });
 
-app.post('/api/logout', (req, res) => {
-  const cookies = parseCookies(req.headers.cookie || '');
-  const sid = cookies[COOKIE_PASSWORD_SESSION_ID];
-  if (sid) deleteSession(sid);
-  clearAuthCookies(res);
+// Compat shim for the SPA.
+app.post('/api/logout', (_req, res) => {
+  res.clearCookie(auth.SESSION_COOKIE, { path: '/' });
   res.json({ ok: true });
 });
 
-app.get('/api/auth-status', (req, res) => {
-  const cookies = parseCookies(req.headers.cookie || '');
-  const sid = cookies[COOKIE_PASSWORD_SESSION_ID];
-  const loggedIn = !!(sid && getSession(sid));
-  res.json({
-    passwordEnabled: isPasswordConfigured(),
-    totpEnabled: !!getTotpSecret(),
-    loggedIn,
-    authRequired: true,
-  });
-});
-
 app.get('/api/session', (req, res) => {
-  if (!isPasswordConfigured()) return res.json({ ok: true, setupRequired: true });
-  const cookies = parseCookies(req.headers.cookie || '');
-  const sid = cookies[COOKIE_PASSWORD_SESSION_ID];
-  const session = sid ? getSession(sid) : null;
-  if (session) return res.json({ ok: true, csrfToken: session.csrfToken });
-  return res.json({ ok: false });
+  const session = auth.getSessionFromReq(req);
+  if (!session) return res.json({ ok: false });
+  return res.json({ ok: true, role: session.user.role, email: session.user.email });
 });
 
-// ── Apply auth to all /api routes (except login, logout, auth-status) ──
-app.use('/api', (req, res, next) => {
-  // Skip auth for login/logout/auth-status/session
-  if (req.path === '/login' || req.path === '/logout' || req.path === '/auth-status' || req.path === '/session') {
+// ── Auth resolution / middleware ────────────────────────────────────────
+// A "session" is either a validated cookie session (simple password auth) or
+// an API key sent as `Authorization: Bearer <key>` / `X-API-Key: <key>`.
+async function resolveSession(req) {
+  const session = auth.getSessionFromReq(req);
+  if (session) {
+    return {
+      session,
+      user: session.user,
+      apiKey: null,
+      permissions: null,
+      isAdmin: true,
+    };
+  }
+
+  const rawKey = apiKeys.extractKey(req);
+  if (!rawKey) return null;
+  const apiKey = apiKeys.verify(rawKey);
+  if (!apiKey) return { invalid: true };
+
+  const permissions = Array.isArray(apiKey.scopes) ? apiKey.scopes : [];
+  const isAdmin = permissions.includes('*');
+  return {
+    session: null,
+    user: {
+      id: 'api-key:' + apiKey.id,
+      role: isAdmin ? 'admin' : 'api',
+      email: apiKey.name,
+    },
+    apiKey,
+    permissions,
+    isAdmin,
+  };
+}
+
+app.use('/api', async (req, res, next) => {
+  const p = req.path;
+  if (p.startsWith('/auth') || p === '/login' || p === '/logout' || p === '/auth-status' || p === '/session') {
     return next();
   }
-  return authMiddleware(req, res, next);
+  try {
+    const a = await resolveSession(req);
+    if (!a) return res.status(401).json({ error: 'Unauthorized. Please login.' });
+    if (a.invalid) {
+      return res.status(401).json({ error: 'Invalid or revoked API key.' });
+    }
+    req.auth = a;
+    req.session = a.session;
+    req.user = a.user;
+    req.apiKey = a.apiKey;
+    req.permissions = a.permissions;
+    req.isAdmin = a.isAdmin;
+    req.callerKey = a.apiKey ? 'api:' + a.apiKey.id : 'user:' + a.user.id;
+    const scopeError = enforceScope(req);
+    if (scopeError) return res.status(403).json({ error: scopeError });
+    return next();
+  } catch (e) {
+    return res.status(401).json({ error: 'Unauthorized.' });
+  }
+});
+// Require a specific permission scope (e.g. "accounts:read"). Admins bypass.
+const requirePerm = (scope) => (req, res, next) => {
+  if (req.isAdmin) return next();
+  const perms = (req.permissions || []).map((x) => String(x));
+  if (perms.includes(scope)) return next();
+  return res.status(403).json({ error: 'Missing required API permission: ' + scope });
+};
+
+const requireAdmin = (req, res, next) => {
+  if (req.isAdmin) return next();
+  return res.status(403).json({ error: 'Admin only.' });
+};
+
+// API keys can hold fine-grained scopes; cookie sessions are admins.
+const requireScope = (scope) => (req, res, next) => {
+  if (req.isAdmin) return next();
+  const perms = (req.permissions || []).map((x) => String(x));
+  if (perms.includes(scope) || perms.includes('*')) return next();
+  return res.status(403).json({ error: 'Missing required API permission: ' + scope });
+};
+
+// Coarse resource→scope map used to enforce fine-grained permissions for
+// API-key subjects on the panel data routes. The action is derived from the
+// HTTP method (safe methods read, everything else write).
+const SCOPE_MAP = [
+  [/^\/rules(\/|$)/, 'rules:read', 'rules:write'],
+  [/^\/catch-all(\/|$)/, 'rules:read', 'rules:write'],
+  [/^\/destinations(\/|$)/, 'destinations:read', 'destinations:write'],
+  [/^\/inbox(\/|$)/, 'inbox:read', 'inbox:write'],
+  [/^\/addresses(\/|$)/, 'inbox:read', 'inbox:write'],
+  [/^\/domains(\/|$)/, 'domains:read', 'domains:read'],
+  [/^\/workers(\/|$)/, 'domains:read', 'domains:read'],
+  [/^\/config(\/|$)/, 'config:read', 'config:write'],
+  [/^\/diagnostics(\/|$)/, 'config:read', 'config:read'],
+];
+
+// Returns an error string when the subject is not permitted for this request,
+// or null when allowed. Admin sessions bypass; any other subject must hold a
+// scoped API key covering the resource+action.
+function enforceScope(req) {
+  if (req.isAdmin) return null;
+  const p = req.path;
+  if (!req.apiKey) return 'Admin role or a scoped API key is required.';
+  // Admin/user-management endpoints are gated by requireAdmin below.
+  if (p.startsWith('/admin/') || p.startsWith('/keys')) return null;
+  const perms = (req.permissions || []).map((x) => String(x));
+  const write = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+  for (const [re, readScope, writeScope] of SCOPE_MAP) {
+    if (re.test(p)) {
+      const need = write ? writeScope : readScope;
+      return perms.includes(need) ? null : 'Missing required API permission: ' + need;
+    }
+  }
+  return 'No permission mapping for ' + req.path;
+}
+
+// ── Admin: user management (stub — password-only mode) ─────────────────
+app.get('/api/admin/users', requireAdmin, (_req, res) => {
+  res.json({ users: [], total: 0 });
+});
+
+app.post('/api/admin/users', requireAdmin, (_req, res) => {
+  res.status(501).json({ error: 'User management tidak tersedia di mode password-only.' });
+});
+
+app.post('/api/admin/users/:id/role', requireAdmin, (_req, res) => {
+  res.status(501).json({ error: 'Tidak tersedia di mode password-only.' });
+});
+
+app.post('/api/admin/users/:id/active', requireAdmin, (_req, res) => {
+  res.status(501).json({ error: 'Tidak tersedia di mode password-only.' });
+});
+
+app.delete('/api/admin/users/:id', requireAdmin, (_req, res) => {
+  res.status(501).json({ error: 'Tidak tersedia di mode password-only.' });
+});
+
+// ── API keys (hashed at rest, plaintext shown once) ─────────────────────
+app.get('/api/keys', requireScope('keys:read'), (req, res) => {
+  const keys = apiKeys.list();
+  const visible = req.isAdmin
+    ? keys
+    : keys.filter((key) => key.id === req.apiKey?.id);
+  res.json({ apiKeys: visible, total: visible.length, availableScopes: apiKeys.ALL_SCOPES });
+});
+
+app.post('/api/keys', requireScope('keys:write'), (req, res) => {
+  try {
+    const requested = Array.isArray(req.body?.scopes) ? req.body.scopes.map(String) : [];
+    const granted = req.permissions || [];
+    if (!req.isAdmin) {
+      const forbidden = requested.filter((scope) => scope === '*' || !granted.includes(scope));
+      if (forbidden.length) {
+        return res.status(403).json({
+          error: 'Cannot grant scopes you do not hold: ' + forbidden.join(', '),
+        });
+      }
+    }
+    const created = apiKeys.create({ name: req.body?.name, scopes: requested });
+    logAudit('api_key.create', req.callerKey, { id: created.apiKey.id, scopes: created.apiKey.scopes });
+    return res.status(201).json(created);
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.message || 'Could not create API key' });
+  }
+});
+
+app.delete('/api/keys/:id', requireScope('keys:write'), (req, res) => {
+  const keyId = String(req.params.id || '');
+  if (!req.isAdmin && req.apiKey?.id !== keyId) {
+    return res.status(403).json({ error: 'You can only revoke your own API key.' });
+  }
+  const removed = apiKeys.remove(keyId);
+  if (!removed) return res.status(404).json({ error: 'API key not found.' });
+  logAudit('api_key.revoke', req.callerKey, { id: keyId });
+  return res.json({ ok: true });
 });
 
 // ── CF API Helpers with proper pagination ──────────────────────────────
@@ -488,7 +545,7 @@ async function getRule(ruleId, zoneId) {
   return res.data.result;
 }
 
-async function createRule(customEmail, destinationInput, type = 'forward', zoneId) {
+async function createRule(customEmail, destinationInput, type = 'worker', zoneId) {
   if (!zoneId) throw new Error('zoneId is required');
   let actions;
   if (type === 'worker') {
@@ -598,6 +655,21 @@ function eToMessage(e) {
   return String((e && (e.message || e)) || e);
 }
 
+// ── Generated address retention (7 days) ───────────────────────────────
+const GENERATED_ADDRESS_RETENTION_DAYS = 7;
+const GENERATED_ADDRESS_CLEANUP_MS = 60 * 1000;
+
+async function cleanupExpiredGeneratedAddresses() {
+  try {
+    await queryD1(
+      `DELETE FROM generated_addresses WHERE created_at <= datetime('now', ?)`,
+      [`-${GENERATED_ADDRESS_RETENTION_DAYS} days`]
+    );
+  } catch (e) {
+    console.warn('[WARN] Generated address cleanup failed: ' + eToMessage(e));
+  }
+}
+
 // ── JSON API Endpoints ─────────────────────────────────────────────────
 
 // Destinations
@@ -634,7 +706,7 @@ app.post('/api/rules', async (req, res) => {
     const customEmail = String(req.body.customEmail || '').trim();
     let destInput = String(req.body.destinationIdManual || '').trim();
     if (!destInput) destInput = String(req.body.destinationId || '').trim();
-    const type = String(req.body.type || 'forward').trim();
+    const type = String(req.body.type || 'worker').trim();
     const zoneId = String(req.body.zoneId || '').trim();
     if (!customEmail) return res.status(400).json({ error: 'customEmail required' });
     if (type !== 'drop' && !destInput) return res.status(400).json({ error: 'destination required' });
@@ -660,6 +732,35 @@ app.delete('/api/rules/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: eToMessage(e) }); }
 });
 
+// Generated addresses (only the latest is kept visible; records expire after 7 days)
+app.post('/api/addresses', async (req, res) => {
+  try {
+    const address = String(req.body?.address || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) {
+      return res.status(400).json({ error: 'valid address required' });
+    }
+    await queryD1(
+      `INSERT INTO generated_addresses (address, created_at) VALUES (?, CURRENT_TIMESTAMP)
+       ON CONFLICT(address) DO UPDATE SET created_at = CURRENT_TIMESTAMP`,
+      [address]
+    );
+    await cleanupExpiredGeneratedAddresses();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: eToMessage(e) }); }
+});
+
+app.get('/api/addresses/latest', async (_req, res) => {
+  try {
+    const rows = await queryD1(
+      `SELECT address, created_at FROM generated_addresses
+       WHERE created_at > datetime('now', ?)
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [`-${GENERATED_ADDRESS_RETENTION_DAYS} days`]
+    );
+    res.json(rows[0] || null);
+  } catch (e) { res.status(500).json({ error: eToMessage(e) }); }
+});
+
 // Inbox
 app.get('/api/inbox/summary', async (_req, res) => {
   try {
@@ -682,9 +783,18 @@ app.get('/api/inbox', async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const offset = parseInt(req.query.offset) || 0;
     const recipient = String(req.query.recipient || '').trim().toLowerCase();
+    const recipients = String(req.query.recipients || '')
+      .split(',')
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean);
+    if (recipient) recipients.push(recipient);
+    const uniqueRecipients = Array.from(new Set(recipients));
     let sql = `SELECT id, sender, recipient, subject, created_at FROM emails`;
     const params = [];
-    if (recipient) { sql += ` WHERE LOWER(recipient) = ?`; params.push(recipient); }
+    if (uniqueRecipients.length) {
+      sql += ` WHERE LOWER(recipient) IN (${uniqueRecipients.map(() => '?').join(', ')})`;
+      params.push(...uniqueRecipients);
+    }
     sql += ` ORDER BY id DESC LIMIT ? OFFSET ?`;
     params.push(limit, offset);
     res.json(await queryD1(sql, params));
@@ -718,8 +828,7 @@ app.get('/api/config', (_req, res) => {
     account_id: process.env.CLOUDFLARE_ACCOUNT_ID || '',
     d1_database_id: process.env.CLOUDFLARE_D1_DATABASE_ID || '',
     has_token: !!process.env.CLOUDFLARE_API_TOKEN,
-    has_admin_api_token: !!getAdminApiToken(),
-    has_totp: !!getTotpSecret()
+    has_admin_api_token: !!getAdminApiToken()
   });
 });
 
@@ -774,6 +883,9 @@ app.post('/api/catch-all', async (req, res) => {
       if (!destinationId) return res.status(400).json({ error: 'destination required for forward' });
       const value = await resolveDestinationArray(destinationId);
       body = { enabled: true, action: { type: 'forward', value } };
+    } else if (action === 'worker') {
+      const worker = destinationId || process.env.EMAIL_WORKER_NAME || 'inbox-worker';
+      body = { enabled: true, action: { type: 'worker', value: [worker] } };
     } else return res.status(400).json({ error: 'unknown action' });
     const resp = await cf.put(`/zones/${zoneId}/email/routing/rules/catch_all`, body);
     if (!resp.data || !resp.data.success) throw new Error(JSON.stringify(resp.data && (resp.data.errors || resp.data)));
@@ -843,93 +955,65 @@ app.get('/api/diagnostics', async (_req, res) => {
   res.json({ ok: allOk, checks });
 });
 
-// ── Two-factor (TOTP) management ───────────────────────────────────────
-let pendingTotpSecret = null;
-
-app.post('/api/totp/setup', (_req, res) => {
-  try {
-    const secret = speakeasy.generateSecret({ length: 20 });
-    const otpauthUrl = `otpauth://totp/${encodeURIComponent('Cloudflare Email Panel:admin')}?secret=${secret.base32}&issuer=${encodeURIComponent('Cloudflare Email Panel')}`;
-    pendingTotpSecret = secret.base32;
-    QRCode.toDataURL(otpauthUrl, { margin: 1 }, (err, dataUrl) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ secret: secret.base32, otpauth_url: otpauthUrl, qr_data_url: dataUrl });
-    });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post('/api/totp/activate', (req, res) => {
-  const token = String(req.body?.token || '').replace(/[\s-]/g, '');
-  if (!pendingTotpSecret) return res.status(400).json({ error: 'No pending 2FA setup. Call setup first.' });
-  if (!token) return res.status(400).json({ error: 'Code required' });
-  if (!verifyTotpCode(pendingTotpSecret, token)) return res.status(401).json({ error: 'Invalid code' });
-  const secret = pendingTotpSecret;
-  pendingTotpSecret = null;
-  process.env.TOTP_SECRET = secret;
-  let persisted = false;
-  try { writeEnvKey('TOTP_SECRET', secret); persisted = true; } catch { /* read-only fs (e.g. Dokploy) */ }
-  res.json({
-    ok: true,
-    persisted,
-    message: persisted
-      ? '2FA aktif dan tersimpan di .env'
-      : '2FA aktif untuk sesi ini. Agar bertahan saat restart/redeploy, set TOTP_SECRET di environment.',
-  });
-});
-
-app.post('/api/totp/disable', (_req, res) => {
-  delete process.env.TOTP_SECRET;
-  try { writeEnvKey('TOTP_SECRET', ''); } catch { /* read-only fs */ }
-  pendingTotpSecret = null;
-  res.json({ ok: true });
-});
-
-// ── Password management (set via API, for initial setup) ───────────────
-app.post('/api/setup-password', rateLimit('setup-password', 5), (req, res) => {
-  const password = String(req.body?.password || '').trim();
-  if (!password || password.length < 8) {
-    return res.status(400).json({ error: 'Password minimal 8 karakter' });
-  }
-  // Only allow if password not yet configured
-  if (isPasswordConfigured()) {
-    return res.status(400).json({ error: 'Password already configured. Edit .env directly to change.' });
-  }
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
-  try {
-    const envPath = path.join(__dirname, '.env');
-    let content = '';
-    if (fs.existsSync(envPath)) content = fs.readFileSync(envPath, 'utf8');
-    const updateKey = (key, val) => {
-      const regex = new RegExp(`^${key}=.*`, 'm');
-      if (regex.test(content)) content = content.replace(regex, `${key}=${val}`);
-      else content += `\n${key}=${val}`;
-    };
-    updateKey('PASSWORD_SALT', salt);
-    updateKey('PASSWORD_HASH', hash);
-    fs.writeFileSync(envPath, content.trim() + '\n');
-    process.env.PASSWORD_SALT = salt;
-    process.env.PASSWORD_HASH = hash;
-    res.json({ ok: true, message: 'Password berhasil diset!' });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+function logAudit(action, callerKey, detail = {}) {
+  const id = callerKey ? callerKey.slice(0, 16) : 'anon';
+  console.log(`[AUDIT] ${new Date().toISOString()} action=${action} caller=${id} ${JSON.stringify(detail)}`);
+}
 
 // ── Static files ───────────────────────────────────────────────────────
-app.use(express.static(path.join(__dirname, 'public')));
+// The React SPA (ui/) is built to ui/dist and served here. The legacy
+// public/ folder remains a fallback for an un-built checkout.
+const UI_DIST_DIR = path.join(__dirname, 'ui', 'dist');
+const UI_INDEX_FILE = path.join(UI_DIST_DIR, 'index.html');
+const LEGACY_PUBLIC_DIR = path.join(__dirname, 'public');
+const HAS_UI_BUILD = fs.existsSync(UI_INDEX_FILE);
+const FRONTEND_DIR = HAS_UI_BUILD ? UI_DIST_DIR : LEGACY_PUBLIC_DIR;
 
-app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+function sendAppShell(res) {
+  return res.sendFile(HAS_UI_BUILD ? UI_INDEX_FILE : path.join(LEGACY_PUBLIC_DIR, 'index.html'));
+}
+
+// Auth gate untuk SPA: wajib punya session yang valid untuk melihat aplikasi.
+app.get('/', (req, res) => {
+  const session = auth.getSessionFromReq(req);
+  if (session) return sendAppShell(res);
+  return res.redirect('/login');
+});
+
+// Halaman login terpisah (disajikan tanpa session).
+app.get('/login', (_req, res) => {
+  if (HAS_UI_BUILD) return sendAppShell(res);
+  return res.sendFile(path.join(LEGACY_PUBLIC_DIR, 'login.html'));
+});
+app.get('/login.html', (_req, res) => res.redirect('/login'));
+
+app.use(express.static(FRONTEND_DIR, { index: false }));
+
 app.get(/^(?!\/api)(?!\/health).*/, (_req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  sendAppShell(res);
 });
 
-setInterval(cleanupSessions, 60 * 1000).unref(); // purge expired/idle sessions
 
-app.listen(PORT, () => {
-  console.log(`Email Routing Panel listening on http://localhost:${PORT}`);
-  if (!isPasswordConfigured() && !getTotpSecret()) {
-    console.log('[INFO] No login method configured. Set PASSWORD and/or TOTP_SECRET, or visit the panel for setup.');
+async function start() {
+  try {
+    const admin = await auth.ensureAdmin();
+    console.log(admin.created
+      ? '[INFO] Password login siap. Set APP_PASSWORD di .env.'
+      : '[INFO] APP_PASSWORD belum di-set. Tambahkan APP_PASSWORD=... di .env lalu restart.');
+  } catch (e) {
+    console.warn('[WARN] Gagal bootstrap admin: ' + (e && e.message ? e.message : e));
   }
-  if (!getAdminApiToken()) {
-    console.log('[INFO] ADMIN_API_TOKEN not configured. API token auth is disabled.');
-  }
-});
+
+  app.listen(PORT, () => {
+    console.log(`Email Routing Panel listening on http://localhost:${PORT}`);
+    if (!process.env.APP_PASSWORD && !process.env.ADMIN_PASSWORD) {
+      console.log('[INFO] Set APP_PASSWORD di .env untuk mengaktifkan login.');
+    }
+    cleanupExpiredGeneratedAddresses();
+    if (process.env.CLOUDFLARE_D1_DATABASE_ID) {
+      setInterval(cleanupExpiredGeneratedAddresses, GENERATED_ADDRESS_CLEANUP_MS).unref();
+    }
+  });
+}
+
+start();
